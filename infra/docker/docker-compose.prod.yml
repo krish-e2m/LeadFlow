@@ -1,0 +1,150 @@
+# Production stack for a single always-on VM (see docs/DEPLOYMENT.md).
+# Deliberately NOT an override of docker-compose.yml: that file's live source bind-mounts and
+# --reload flags are dev-only, and Compose's list-merge rules make "remove a published port via
+# override" unreliable. This is a complete, self-contained production definition instead.
+#
+# Only Caddy publishes host ports (80/443). Postgres, Redis, api and web are reachable only on
+# the internal Docker network — nothing else is exposed to the internet.
+#
+# Usage (from the repo root, on the VM):
+#   docker compose -f infra/docker/docker-compose.prod.yml --env-file .env up -d --build
+#   docker exec leadflow_api sh -c "cd /app && PYTHONPATH=/app alembic upgrade head"
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leadflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-leadflow}
+      POSTGRES_USER: ${POSTGRES_USER:-leadflow_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a real POSTGRES_PASSWORD in .env for production}
+      # Read by init-db.prod.sh to create the runtime role with a real password, not the
+      # hardcoded dev one in init-db.sql (which this file deliberately does not mount).
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Set a real POSTGRES_APP_PASSWORD in .env for production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.prod.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leadflow_admin} -d ${POSTGRES_DB:-leadflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - leadflow_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: leadflow_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - leadflow_net
+
+  api:
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+    container_name: leadflow_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      ENVIRONMENT: production
+      POSTGRES_ADMIN_URL: postgresql+asyncpg://${POSTGRES_USER:-leadflow_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:?Set a real POSTGRES_APP_PASSWORD in .env for production}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_APP_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:?Set a real POSTGRES_APP_PASSWORD in .env for production}@postgres:5432/${POSTGRES_DB:-leadflow}
+      REDIS_URL: redis://redis:6379/0
+    # No bind-mounted source, no --reload: runs the image exactly as built, same as any other
+    # deploy. Two workers is a modest default for a 2 OCPU VM; raise if the VM is bigger.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    expose:
+      - "8000"
+    networks:
+      - leadflow_net
+
+  worker:
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+    container_name: leadflow_worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      ENVIRONMENT: production
+      POSTGRES_ADMIN_URL: postgresql+asyncpg://${POSTGRES_USER:-leadflow_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:?Set a real POSTGRES_APP_PASSWORD in .env for production}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_APP_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:?Set a real POSTGRES_APP_PASSWORD in .env for production}@postgres:5432/${POSTGRES_DB:-leadflow}
+      REDIS_URL: redis://redis:6379/0
+    command: python -m arq app.jobs.worker.WorkerSettings
+    networks:
+      - leadflow_net
+
+  web:
+    build:
+      context: ../../
+      dockerfile: apps/web/Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL (e.g. https://api.yourdomain.com/api/v1) in .env}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
+    container_name: leadflow_web
+    restart: unless-stopped
+    depends_on:
+      - api
+    expose:
+      - "3000"
+    networks:
+      - leadflow_net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: leadflow_caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN (e.g. yourdomain.com) in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - leadflow_net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+
+networks:
+  leadflow_net:
+    driver: bridge

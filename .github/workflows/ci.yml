@@ -1,0 +1,96 @@
+name: CI
+
+# Runs on every PR to main and every push to main, per docs/poc.md §18 ("CI on every PR to the
+# default branch"). Mirrors exactly the commands used to verify this project by hand all session:
+# backend pytest, frontend typecheck/lint/build. No deploy step here — see docs/DEPLOYMENT.md.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: leadflow_test
+          POSTGRES_USER: leadflow_admin
+          POSTGRES_PASSWORD: ci_test_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U leadflow_admin -d leadflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      ENVIRONMENT: development
+      JWT_SECRET_KEY: ci-test-only-secret-key-not-for-production-use-minimum-32-chars
+      POSTGRES_ADMIN_URL: postgresql+asyncpg://leadflow_admin:ci_test_password@localhost:5432/leadflow_test
+      DATABASE_URL: postgresql+asyncpg://leadflow_admin:ci_test_password@localhost:5432/leadflow_test
+      DATABASE_APP_URL: postgresql+asyncpg://leadflow_admin:ci_test_password@localhost:5432/leadflow_test
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Run Alembic migrations
+        run: python -m alembic upgrade head
+
+      - name: Ruff lint
+        run: python -m ruff check app
+
+      - name: pytest
+        run: python -m pytest -q --no-header
+
+  frontend:
+    name: Frontend (typecheck, lint, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Build
+        # Dummy values: this only needs to produce a successful build, not reach real services.
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+          NEXT_PUBLIC_GOOGLE_CLIENT_ID: ci-placeholder
+        run: npx next build

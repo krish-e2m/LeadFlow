@@ -1,0 +1,21 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "leadflow-api",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "Set-Location apps/api; ./.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "leadflow-web",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-Command", "Set-Location apps/web; npm run dev"],
+      "port": 3000
+    }
+  ]
+}

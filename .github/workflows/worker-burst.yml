@@ -1,0 +1,64 @@
+name: Worker (burst, scheduled)
+
+# Stands in for an always-on ARQ worker on the no-card $0 path (see docs/DEPLOYMENT.md).
+# `arq ... --burst` processes whatever's currently queued in Redis, then exits — no long-running
+# host needed. Every 5 minutes is GitHub Actions' minimum schedule granularity; free-tier
+# scheduled runs aren't guaranteed to fire exactly on time, so treat this as "within several
+# minutes," not instant. Needs the same env a normal worker process needs — same Neon Postgres,
+# same Upstash Redis, same provider keys as the API service on Render.
+#
+# Setup: Settings -> Secrets and variables -> Actions -> New repository secret, for each of the
+# WORKER_* names below (values are the same ones you set on Render, see render.yaml).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab, e.g. for testing
+
+concurrency:
+  group: leadflow-worker-burst
+  cancel-in-progress: false # let an in-flight burst finish; queue the next trigger instead
+
+jobs:
+  burst:
+    name: Process queued jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      ENVIRONMENT: production
+      JWT_SECRET_KEY: ${{ secrets.WORKER_JWT_SECRET_KEY }}
+      POSTGRES_ADMIN_URL: ${{ secrets.WORKER_POSTGRES_ADMIN_URL }}
+      DATABASE_URL: ${{ secrets.WORKER_DATABASE_URL }}
+      DATABASE_APP_URL: ${{ secrets.WORKER_DATABASE_URL }}
+      REDIS_URL: ${{ secrets.WORKER_REDIS_URL }}
+      HUNTER_API_KEY: ${{ secrets.WORKER_HUNTER_API_KEY }}
+      HUNTER_ENABLED: "true"
+      OPENROUTER_API_KEY: ${{ secrets.WORKER_OPENROUTER_API_KEY }}
+      OPENROUTER_DEFAULT_MODEL: ${{ secrets.WORKER_OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_FAST_MODEL: ${{ secrets.WORKER_OPENROUTER_FAST_MODEL }}
+      HUBSPOT_ACCESS_TOKEN: ${{ secrets.WORKER_HUBSPOT_ACCESS_TOKEN }}
+      HUBSPOT_PORTAL_ID: ${{ secrets.WORKER_HUBSPOT_PORTAL_ID }}
+      HUBSPOT_ENABLED: "true"
+      PAGESPEED_API_KEY: ${{ secrets.WORKER_PAGESPEED_API_KEY }}
+      RESEND_API_KEY: ${{ secrets.WORKER_RESEND_API_KEY }}
+      RESEND_FROM_EMAIL: ${{ secrets.WORKER_RESEND_FROM_EMAIL }}
+      RESEND_ENABLED: "true"
+      FIRECRAWL_API_KEY: ${{ secrets.WORKER_FIRECRAWL_API_KEY }}
+      FIRECRAWL_ENABLED: "true"
+      SERPAPI_API_KEY: ${{ secrets.WORKER_SERPAPI_API_KEY }}
+      SERPAPI_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Run queued jobs (burst mode)
+        run: python -m arq app.jobs.worker.WorkerSettings --burst

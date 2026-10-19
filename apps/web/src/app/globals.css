@@ -1,0 +1,228 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens (light only). Every component reads these through the Tailwind theme — no
+ * hardcoded colors, sizes or shadows — so this file is the single place the whole app's palette,
+ * radius and elevation language lives. Cool slate surfaces, navy ink and a slightly deeper shadow
+ * system than before, matching the polish of the marketing landing page (src/components/landing).
+ */
+:root {
+  /* Surfaces */
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --surface-subtle: #f1f4f8;
+  --surface-muted: #e9edf3;
+
+  /* Borders */
+  --border: #e2e6ed;
+  --border-strong: #cbd2dc;
+
+  /* Text */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
+
+  /* Ink (primary actions) */
+  --ink: #0f172a;
+  --ink-hover: #1e293b;
+
+  /* Accent: the same emerald used across the marketing site (see tailwind `brand` colors) */
+  --accent: #047857;
+  --accent-hover: #065f46;
+  --accent-subtle: #ecfdf5;
+
+  /* Status */
+  --success: #047857;
+  --success-subtle: #ecfdf5;
+  --warning: #b45309;
+  --warning-subtle: #fdf3e7;
+  --danger: #b42318;
+  --danger-subtle: #fcedeb;
+  --neutral-badge: #475569;
+  --neutral-badge-subtle: #eef1f5;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-pop: 0 10px 30px -5px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.06);
+  --shadow-modal: 0 24px 60px -12px rgba(15, 23, 42, 0.22), 0 4px 12px rgba(15, 23, 42, 0.08);
+  --backdrop: rgba(15, 23, 42, 0.25);
+
+  /* Focus */
+  --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px rgba(4, 120, 87, 0.45);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --duration-fast: 130ms;
+  --duration-base: 180ms;
+  --duration-sheet: 280ms;
+
+  /* Layout */
+  --sidebar-width: 240px;
+  --sidebar-rail-width: 64px;
+  --topbar-height: 56px;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  color: var(--text-primary);
+  background: var(--bg);
+  font-size: 14px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+::selection {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+/* Neutral scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+@layer components {
+  /* Consistent keyboard focus for every interactive element */
+  .focus-ring:focus-visible,
+  .focus-ring-within:has(:focus-visible) {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  /* Row highlight for new/updated data: accent wash that fades out */
+  .row-flash {
+    animation: row-flash 1200ms var(--ease-out) 1;
+  }
+
+  /* Skeletons: gentle opacity pulse, no shimmer */
+  .skeleton {
+    background: var(--surface-muted);
+    border-radius: 6px;
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes row-flash {
+  from {
+    background-color: var(--accent-subtle);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Reduced motion: keep fades, remove movement */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+ * Shared marketing-style background treatment: the landing page
+ * (src/components/landing/*), AuthShell (src/components/AuthShell.tsx) and
+ * AppShell (src/components/AppShell.tsx — the dashboard's own canvas, behind
+ * its solid sidebar/header and every opaque card/table on top of it).
+ * ========================================================================== */
+
+.landing-mesh-bg {
+  background: radial-gradient(circle at 15% 20%, rgba(16, 185, 129, 0.12) 0%, transparent 45%),
+    radial-gradient(circle at 85% 15%, rgba(99, 102, 241, 0.14) 0%, transparent 40%),
+    radial-gradient(circle at 50% 60%, rgba(13, 148, 136, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 70% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 45%);
+}
+
+.landing-dark-glow-bg {
+  background: radial-gradient(circle at 75% 25%, rgba(16, 185, 129, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 25% 75%, rgba(99, 102, 241, 0.12) 0%, transparent 50%), #0b132b;
+}
+
+.landing-grid-pattern {
+  background-image: radial-gradient(rgba(148, 163, 184, 0.2) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@keyframes landing-scan-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.landing-shimmer-active {
+  position: relative;
+  overflow: hidden;
+}
+.landing-shimmer-active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(16, 185, 129, 0.18), transparent);
+  animation: landing-scan-sweep 1.2s infinite ease-in-out;
+  pointer-events: none;
+}
+
+.landing-step-connector {
+  background-image: linear-gradient(to right, #10b981 40%, rgba(255, 255, 255, 0) 0%);
+  background-position: top;
+  background-size: 10px 2px;
+  background-repeat: repeat-x;
+}
+
+.landing-hover-lift {
+  transition:
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.landing-hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 32px -10px rgba(15, 23, 42, 0.08);
+}

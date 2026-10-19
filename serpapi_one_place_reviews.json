@@ -1,0 +1,117 @@
+﻿{
+    "provider":  "SerpApi Google Maps Reviews",
+    "fetched_at_utc":  "2026-10-14T10:19:47.4938736Z",
+    "business":  {
+                     "title":  "The Night Life Cafe",
+                     "address":  "Rajpar Rd, Sanala, Morbi, Saktasanala, Gujarat 363643, India",
+                     "rating":  4.3,
+                     "reviews":  517,
+                     "type":  "Cafe"
+                 },
+    "reviews":  [
+                    {
+                        "position":  1,
+                        "link":  "https://www.google.com/maps/reviews/data=!4m8!14m7!1m6!2m5!1sCi9DQUlRQUNvZENodHljRjlvT2psb1ZuVlpXVVpZU2s4eWFFUTRiMjloZDJWWVVVRRAB!2m1!1s0x0:0x8cc0b464baf77201!3m1!1s2@1:CAIQACodChtycF9oOjloVnVZWUZYSk8yaEQ4b29hd2VYUUE%7C%7C?hl=en-US",
+                        "rating":  5.0,
+                        "date":  "6 days ago",
+                        "iso_date":  "2026-10-07T14:11:50Z",
+                        "iso_date_of_last_edit":  "2026-10-07T14:11:50Z",
+                        "source":  "Google",
+                        "review_id":  "Ci9DQUlRQUNvZENodHljRjlvT2psb1ZuVlpXVVpZU2s4eWFFUTRiMjloZDJWWVVVRRAB",
+                        "user":  {
+                                     "name":  "Classic automobile",
+                                     "link":  "https://www.google.com/maps/contrib/112381498553423790611?hl=en-US",
+                                     "contributor_id":  "112381498553423790611",
+                                     "thumbnail":  "https://lh3.googleusercontent.com/a-/ALV-UjXIqUjO-bkIZwHt26OFgOtmushZtJMYj4xoVrZpTjcZofnAH_Y=s120-c-rp-mo-br100",
+                                     "reviews":  1,
+                                     "photos":  4
+                                 },
+                        "likes":  0
+                    },
+                    {
+                        "position":  2,
+                        "link":  "https://www.google.com/maps/reviews/data=!4m8!14m7!1m6!2m5!1sCi9DQUlRQUNvZENodHljRjlvT2t0NU1YRkJhVTFFZHkwMk5VbEdNWEl3VDJSbU1VRRAB!2m1!1s0x0:0x8cc0b464baf77201!3m1!1s2@1:CAIQACodChtycF9oOkt5MXFBaU1Edy02NUlGMXIwT2RmMUE%7C%7C?hl=en-US",
+                        "rating":  5.0,
+                        "date":  "Edited 2 weeks ago",
+                        "iso_date":  "2026-06-19T02:27:13Z",
+                        "iso_date_of_last_edit":  "2026-09-28T17:52:13Z",
+                        "source":  "Google",
+                        "review_id":  "Ci9DQUlRQUNvZENodHljRjlvT2t0NU1YRkJhVTFFZHkwMk5VbEdNWEl3VDJSbU1VRRAB",
+                        "user":  {
+                                     "name":  "Milan Patel",
+                                     "link":  "https://www.google.com/maps/contrib/115391327155730001894?hl=en-US",
+                                     "contributor_id":  "115391327155730001894",
+                                     "thumbnail":  "https://lh3.googleusercontent.com/a-/ALV-UjV7pMOamoPuap505aEU1v8jYxzgnDR5YNj5w8606XMkwhbhQvnO=s120-c-rp-mo-ba12-br100",
+                                     "local_guide":  true,
+                                     "reviews":  11,
+                                     "photos":  15
+                                 },
+                        "details":  {
+                                        "food":  5,
+                                        "service":  5,
+                                        "atmosphere":  5
+                                    },
+                        "likes":  0
+                    },
+                    {
+                        "position":  3,
+                        "link":  "https://www.google.com/maps/reviews/data=!4m8!14m7!1m6!2m5!1sCi9DQUlRQUNvZENodHljRjlvT2sxNVVYRTVkRzh5YURCR1JXVk9URTFXY2xaMWVuYxAB!2m1!1s0x0:0x8cc0b464baf77201!3m1!1s2@1:CAIQACodChtycF9oOk15UXE5dG8yaDBGRWVOTE1WclZ1enc%7C%7C?hl=en-US",
+                        "rating":  5.0,
+                        "date":  "3 weeks ago",
+                        "iso_date":  "2026-09-17T10:49:21Z",
+                        "iso_date_of_last_edit":  "2026-09-17T10:49:21Z",
+                        "source":  "Google",
+                        "review_id":  "Ci9DQUlRQUNvZENodHljRjlvT2sxNVVYRTVkRzh5YURCR1JXVk9URTFXY2xaMWVuYxAB",
+                        "user":  {
+                                     "name":  "jay thakar",
+                                     "link":  "https://www.google.com/maps/contrib/111137689619902775541?hl=en-US",
+                                     "contributor_id":  "111137689619902775541",
+                                     "thumbnail":  "https://lh3.googleusercontent.com/a-/ALV-UjVMTMFKoNKBBSuN0ZMJpw1zSdG_KnmVj-oCh8qqyPIMlBLsNCuATg=s120-c-rp-mo-br100",
+                                     "local_guide":  true,
+                                     "reviews":  0,
+                                     "photos":  8
+                                 },
+                        "likes":  0
+                    },
+                    {
+                        "position":  4,
+                        "link":  "https://www.google.com/maps/reviews/data=!4m8!14m7!1m6!2m5!1sCi9DQUlRQUNvZENodHljRjlvT2pWS1FXNUJjVkpVVERGWmJWOVFjelpGY3psbVQyYxAB!2m1!1s0x0:0x8cc0b464baf77201!3m1!1s2@1:CAIQACodChtycF9oOjVKQW5BcVJUTDFZbV9QczZFczlmT2c%7C%7C?hl=en-US",
+                        "rating":  5.0,
+                        "date":  "4 weeks ago",
+                        "iso_date":  "2026-09-16T04:41:08Z",
+                        "iso_date_of_last_edit":  "2026-09-16T04:41:08Z",
+                        "source":  "Google",
+                        "review_id":  "Ci9DQUlRQUNvZENodHljRjlvT2pWS1FXNUJjVkpVVERGWmJWOVFjelpGY3psbVQyYxAB",
+                        "user":  {
+                                     "name":  "Shailesh Patni",
+                                     "link":  "https://www.google.com/maps/contrib/116503845776078431853?hl=en-US",
+                                     "contributor_id":  "116503845776078431853",
+                                     "thumbnail":  "https://lh3.googleusercontent.com/a/ACg8ocK-8tK0z2zgx6-JIqJXg7tlXnaWx3EIyg6fqr1P6In79bC9gQ=s120-c-rp-mo-br100",
+                                     "local_guide":  true,
+                                     "reviews":  3,
+                                     "photos":  0
+                                 },
+                        "likes":  0
+                    },
+                    {
+                        "position":  5,
+                        "link":  "https://www.google.com/maps/reviews/data=!4m8!14m7!1m6!2m5!1sCi9DQUlRQUNvZENodHljRjlvT21GYVZqSnJZV2hZUm5CSk56ZzVjV2RKV2pOc1ZsRRAB!2m1!1s0x0:0x8cc0b464baf77201!3m1!1s2@1:CAIQACodChtycF9oOmFaVjJrYWhYRnBJNzg5cWdJWjNsVlE%7C%7C?hl=en-US",
+                        "rating":  4.0,
+                        "date":  "a month ago",
+                        "iso_date":  "2026-09-12T19:30:13Z",
+                        "iso_date_of_last_edit":  "2026-09-12T19:30:13Z",
+                        "source":  "Google",
+                        "review_id":  "Ci9DQUlRQUNvZENodHljRjlvT21GYVZqSnJZV2hZUm5CSk56ZzVjV2RKV2pOc1ZsRRAB",
+                        "user":  {
+                                     "name":  "Bhavik Makadiya",
+                                     "link":  "https://www.google.com/maps/contrib/111890818187730077946?hl=en-US",
+                                     "contributor_id":  "111890818187730077946",
+                                     "thumbnail":  "https://lh3.googleusercontent.com/a/ACg8ocLdwd1dn1VHmHXiZC2cfdlBhl2u72RmSDFKsx1FfilDMi5qzhI=s120-c-rp-mo-ba12-br100",
+                                     "local_guide":  true,
+                                     "reviews":  15,
+                                     "photos":  8
+                                 },
+                        "likes":  0
+                    }
+                ]
+}

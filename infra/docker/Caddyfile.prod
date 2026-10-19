@@ -1,0 +1,14 @@
+# Caddy automatically obtains and renews Let's Encrypt certificates for both hostnames below —
+# no manual certbot setup needed. {$DOMAIN} is read from the environment (see docker-compose.prod.yml).
+# Requires: DNS A records for {$DOMAIN} and api.{$DOMAIN} pointing at this VM's public IP,
+# and ports 80/443 open in the VM's firewall before Caddy can issue certificates.
+
+{$DOMAIN} {
+	reverse_proxy web:3000
+	encode gzip
+}
+
+api.{$DOMAIN} {
+	reverse_proxy api:8000
+	encode gzip
+}

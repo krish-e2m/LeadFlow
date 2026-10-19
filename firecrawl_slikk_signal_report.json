@@ -1,0 +1,119 @@
+﻿{
+    "target_url":  "https://www.slikk.club/",
+    "checked_at_utc":  "2026-10-15T05:42:59.4205397Z",
+    "firecrawl_api_success":  true,
+    "api_elapsed_seconds":  14.38,
+    "page_title":  "Slikk | Get your fit delivered in under 60mins",
+    "reported_http_status":  200,
+    "final_url":  "https://www.slikk.club/",
+    "estimated_extracted_word_count":  1015,
+    "reported_credits_cost":  null,
+    "poc_source_scan":  "references_found_not_proof_of_runtime_integration",
+    "firecrawl_source_files":  [
+                                   "apps\\api\\app\\core\\config.py",
+                                   "apps\\api\\app\\providers\\crawler.py",
+                                   "apps\\api\\app\\providers\\firecrawl.py",
+                                   "apps\\api\\app\\providers\\manager.py",
+                                   "apps\\api\\scripts\\check_firecrawl.py",
+                                   "apps\\api\\tests\\test_firecrawl.py"
+                               ],
+    "signals":  [
+                    {
+                        "Signal":  "legacy_platform",
+                        "Result":  "NOT DETECTED",
+                        "Evidence":  "No common CMS/e-commerce platform marker found in returned homepage HTML",
+                        "Confidence":  "Low: platform may be hidden or use custom code"
+                    },
+                    {
+                        "Signal":  "old_design",
+                        "Result":  "NOT RELIABLY ASSESSABLE",
+                        "Evidence":  "A single scrape cannot judge visual design age reliably",
+                        "Confidence":  "Low"
+                    },
+                    {
+                        "Signal":  "weak_ctas",
+                        "Result":  "CTA TEXT FOUND",
+                        "Evidence":  "Found 7 common CTA phrase occurrence(s)",
+                        "Confidence":  "Low: count alone cannot judge CTA quality"
+                    },
+                    {
+                        "Signal":  "not_mobile_friendly",
+                        "Result":  "POSSIBLE GAP",
+                        "Evidence":  "No viewport meta tag detected in returned HTML",
+                        "Confidence":  "Medium: returned HTML can be incomplete"
+                    },
+                    {
+                        "Signal":  "no_ssl",
+                        "Result":  "NO ISSUE INDICATED",
+                        "Evidence":  "Firecrawl reports an HTTPS final URL: https://www.slikk.club/",
+                        "Confidence":  "Medium: verifies HTTPS access, not every TLS configuration detail"
+                    },
+                    {
+                        "Signal":  "thin_content",
+                        "Result":  "NOT FLAGGED BY WORD-COUNT HEURISTIC",
+                        "Evidence":  "Extracted homepage text contains about 1015 words",
+                        "Confidence":  "Low: quantity is not content quality"
+                    },
+                    {
+                        "Signal":  "no_analytics",
+                        "Result":  "NO MARKER DETECTED",
+                        "Evidence":  "No common analytics markers were found in returned HTML/text",
+                        "Confidence":  "Low: tag managers or server-side analytics may hide usage"
+                    },
+                    {
+                        "Signal":  "no_live_chat",
+                        "Result":  "NO MARKER DETECTED",
+                        "Evidence":  "No common live-chat widget marker found",
+                        "Confidence":  "Low: chat may load dynamically or use another vendor"
+                    },
+                    {
+                        "Signal":  "poor_aeo_geo",
+                        "Result":  "POSSIBLE OPTIMIZATION GAP",
+                        "Evidence":  "Detected 1/3 marker groups: contact/entity details",
+                        "Confidence":  "Low: only a shallow AEO/GEO heuristic"
+                    },
+                    {
+                        "Signal":  "stale_blog",
+                        "Result":  "NOT ASSESSABLE",
+                        "Evidence":  "No blog/insights/article URL found in homepage HTML; absence of a link does not prove no blog exists",
+                        "Confidence":  "Low"
+                    },
+                    {
+                        "Signal":  "no_press",
+                        "Result":  "NOT ASSESSABLE",
+                        "Evidence":  "No press/newsroom/media link detected on homepage",
+                        "Confidence":  "Low: may exist on an unlinked route"
+                    },
+                    {
+                        "Signal":  "no_case_studies",
+                        "Result":  "NOT ASSESSABLE",
+                        "Evidence":  "No case-study/portfolio marker detected on homepage",
+                        "Confidence":  "Low: may exist on unlinked pages"
+                    },
+                    {
+                        "Signal":  "no_video",
+                        "Result":  "NO VIDEO MARKER DETECTED",
+                        "Evidence":  "No common video tags/embed markers found on homepage",
+                        "Confidence":  "Low: video may be loaded dynamically or on another page"
+                    },
+                    {
+                        "Signal":  "weak_social",
+                        "Result":  "SOCIAL LINKS FOUND",
+                        "Evidence":  "instagram.com, facebook.com",
+                        "Confidence":  "Low: presence alone cannot measure posting frequency or audience strength"
+                    },
+                    {
+                        "Signal":  "weak_email_capture",
+                        "Result":  "EMAIL-CAPTURE MARKER FOUND",
+                        "Evidence":  "Email input or newsletter/subscription wording detected",
+                        "Confidence":  "Medium for marker presence, not form functionality"
+                    },
+                    {
+                        "Signal":  "hiring",
+                        "Result":  "HIRING MARKER FOUND",
+                        "Evidence":  "https://www.slikk.club/careers",
+                        "Confidence":  "Medium for marker presence; open roles need verification"
+                    }
+                ],
+    "disclaimer":  "Heuristic homepage-only findings. Not authoritative qualification scores. Blog/press/case studies/hiring and social strength may require linked-page or external checks."
+}

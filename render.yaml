@@ -1,0 +1,84 @@
+# Render Blueprint for the API only (see docs/DEPLOYMENT.md, "no-card path").
+# Web lives on Vercel, Postgres on Neon, Redis on Upstash, the worker runs via a GitHub Actions
+# cron (--burst mode) — Render's free tier has no background-worker service type, only web.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> point at this repo. Render reads this file and
+# creates the service; you fill in the `sync: false` env vars by hand (never commit real secrets
+# here). After the first deploy, run migrations once via Render's shell:
+#   cd /app && PYTHONPATH=/app alembic upgrade head
+
+services:
+  - type: web
+    name: leadflow-api
+    runtime: docker
+    repo: # fill in your GitHub repo URL when creating the Blueprint, or leave blank if Render
+          # infers it from the connected repository
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /readyz
+    autoDeployTrigger: commit
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: JWT_SECRET_KEY
+        sync: false # generate with: openssl rand -base64 48
+      - key: BACKEND_CORS_ORIGINS
+        sync: false # e.g. ["https://yourapp.vercel.app"]
+      - key: ALLOWED_HOSTS
+        sync: false # e.g. ["leadflow-api.onrender.com"]
+      # Neon gives one connection string; the app expects two roles (an RLS-bypassing admin role
+      # for migrations, a restricted app role for runtime). Run infra/scripts/neon-init.sql once
+      # against your Neon database first (creates leadflow_app), then set these from Neon's
+      # connection details page, swapping the role name/password per string:
+      - key: POSTGRES_ADMIN_URL
+        sync: false # postgresql+asyncpg://<neon_user>:<password>@<neon_host>/<db>?ssl=require
+      - key: DATABASE_URL
+        sync: false # postgresql+asyncpg://leadflow_app:<password>@<neon_host>/<db>?ssl=require
+      - key: DATABASE_APP_URL
+        sync: false # same as DATABASE_URL
+      - key: REDIS_URL
+        sync: false # Upstash "rediss://" TCP connection string (TLS) — NOT the REST URL/token
+      - key: GOOGLE_REDIRECT_URI
+        sync: false # https://leadflow-api.onrender.com/api/v1/auth/google/callback
+      - key: GOOGLE_FRONTEND_REDIRECT_URL
+        sync: false # https://yourapp.vercel.app/dashboard
+      # All other provider keys (Hunter, OpenRouter, HubSpot, PageSpeed, Resend, Firecrawl,
+      # SerpApi, Google OAuth client) carry over unchanged from your working .env — same
+      # accounts, same free tiers, just entered here via the dashboard rather than committed.
+      - key: HUNTER_API_KEY
+        sync: false
+      - key: HUNTER_ENABLED
+        value: "true"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_DEFAULT_MODEL
+        sync: false
+      - key: OPENROUTER_FAST_MODEL
+        sync: false
+      - key: HUBSPOT_ACCESS_TOKEN
+        sync: false
+      - key: HUBSPOT_PORTAL_ID
+        sync: false
+      - key: HUBSPOT_ENABLED
+        value: "true"
+      - key: PAGESPEED_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: RESEND_ENABLED
+        value: "true"
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: FIRECRAWL_ENABLED
+        value: "true"
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: SERPAPI_ENABLED
+        value: "true"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

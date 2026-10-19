@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leadflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-leadflow}
+      POSTGRES_USER: ${POSTGRES_USER:-leadflow_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadflow_admin_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leadflow_admin} -d ${POSTGRES_DB:-leadflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - leadflow_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: leadflow_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - leadflow_net
+
+  api:
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+    container_name: leadflow_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      POSTGRES_ADMIN_URL: postgresql+asyncpg://${POSTGRES_USER:-leadflow_admin}:${POSTGRES_PASSWORD:-leadflow_admin_password}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:-leadflow_app_password}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_APP_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:-leadflow_app_password}@postgres:5432/${POSTGRES_DB:-leadflow}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../apps/api:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - leadflow_net
+
+  worker:
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+    container_name: leadflow_worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      POSTGRES_ADMIN_URL: postgresql+asyncpg://${POSTGRES_USER:-leadflow_admin}:${POSTGRES_PASSWORD:-leadflow_admin_password}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:-leadflow_app_password}@postgres:5432/${POSTGRES_DB:-leadflow}
+      DATABASE_APP_URL: postgresql+asyncpg://${POSTGRES_APP_USER:-leadflow_app}:${POSTGRES_APP_PASSWORD:-leadflow_app_password}@postgres:5432/${POSTGRES_DB:-leadflow}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ../../apps/api:/app
+    command: python -m arq app.jobs.worker.WorkerSettings
+    networks:
+      - leadflow_net
+
+  web:
+    build:
+      context: ../../
+      dockerfile: apps/web/Dockerfile
+    container_name: leadflow_web
+    restart: unless-stopped
+    depends_on:
+      - api
+    env_file:
+      - ../../.env
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../../apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    networks:
+      - leadflow_net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  leadflow_net:
+    driver: bridge
