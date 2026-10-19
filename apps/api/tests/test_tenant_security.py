@@ -137,6 +137,7 @@ async def test_migration_applied_and_rls_enforced_on_all_tables():
             "007_engine_ideal_client_bonus",
             "008_crm_sync_idempotency_key",
             "009_add_google_auth_fields",
+            "010_lead_error_reason",
         )
 
         # Check existing domain tables

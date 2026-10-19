@@ -18,6 +18,20 @@ class PipelineStatus(str, Enum):
     DRAFTING = "drafting"
     DRAFTED = "drafted"
     SYNCED = "synced"
+    ERROR = "error"
+
+
+# Leads a person has already acted on. A later search that finds the same domain again must not
+# re-enrich them or move them back to "scored".
+POST_REVIEW_STATUSES = frozenset(
+    {
+        PipelineStatus.APPROVED,
+        PipelineStatus.DISQUALIFIED,
+        PipelineStatus.DRAFTING,
+        PipelineStatus.DRAFTED,
+        PipelineStatus.SYNCED,
+    }
+)
 
 
 class ScoreBand(str, Enum):

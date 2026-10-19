@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.constants import ApprovalStatus, PipelineStatus, ScoreBand
 from app.schemas.contact import ContactResponse
@@ -47,6 +47,11 @@ class LeadResponse(BaseModel):
     approved_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    # Latest overall score (list responses), why the lead is in the "error" stage, and whether
+    # it is archived.
+    overall_score: Optional[float] = None
+    error_reason: Optional[str] = None
+    archived_at: Optional[datetime] = Field(default=None, validation_alias="deleted_at")
     # Approval responses only: what happened to the automatic email draft
     # (queued, exists, disabled, not_configured or unavailable).
     auto_draft: Optional[str] = None
@@ -88,3 +93,6 @@ class BulkLeadActionResponse(BaseModel):
     drafts_queued: int = 0
     total_failed: int
     results: List[BulkItemResult]
+    # Bulk rescore only: band counts of the re-scored leads before and after, e.g.
+    # {"before": {"qualified": 3, "review": 5}, "after": {"qualified": 4, "review": 4}}.
+    band_changes: Optional[Dict[str, Dict[str, int]]] = None

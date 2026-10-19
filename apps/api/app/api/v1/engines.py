@@ -21,8 +21,8 @@ from app.schemas.engine import (
     EngineCreate,
     EngineParamResponse,
     EngineResponse,
-    GenerateEngineWeightsRequest,
     GeneratedEngineWeightsResponse,
+    GenerateEngineWeightsRequest,
     SignalWeightConfig,
 )
 from app.scoring.catalog import DEFAULT_SIGNAL_WEIGHTS

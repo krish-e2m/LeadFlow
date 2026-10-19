@@ -151,7 +151,10 @@ export const LeadSheet: React.FC<LeadSheetProps> = ({ leadId, onClose, onLeadCha
   const handleApprove = () => {
     if (!lead) return;
     const needsOverride =
-      lead.score_band === "disqualified" || lead.pipeline_status === "disqualified" || lead.approval_status === "rejected";
+      lead.score_band === "disqualified" ||
+      lead.pipeline_status === "disqualified" ||
+      lead.pipeline_status === "error" ||
+      lead.approval_status === "rejected";
     if (needsOverride) {
       setOverrideOpen(true);
       return;
@@ -321,6 +324,11 @@ export const LeadSheet: React.FC<LeadSheetProps> = ({ leadId, onClose, onLeadCha
                         </p>
                       )}
                     </div>
+                  ) : lead.pipeline_status === "error" ? (
+                    <p className="rounded-card bg-danger-subtle p-3 text-sm text-fg">
+                      We couldn&apos;t audit this website, so it has no score.
+                      {lead.error_reason && <span className="mt-1 block text-caption text-fg-secondary">{lead.error_reason}</span>}
+                    </p>
                   ) : (
                     <p className="text-sm text-fg-secondary">This lead hasn't been scored yet.</p>
                   )}

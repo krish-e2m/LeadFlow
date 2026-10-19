@@ -10,8 +10,13 @@ import { PageHeader } from "@/components/PageHeader";
 import { Skeleton } from "@/components/Skeleton";
 import { EmptyState, ErrorState } from "@/components/StateDisplay";
 import { useToast } from "@/components/Toast";
-import { ScoringEngine, ScoringEngineParam } from "@/types";
+import { Lead, ScoringEngine, ScoringEngineParam } from "@/types";
 import { apiClient } from "@/lib/api-client";
+import { describeBandChanges, type BandChanges } from "@/lib/utils";
+
+// Re-scoring is compute-only (existing evidence, no provider calls) and the bulk endpoint takes
+// at most 100 leads per request.
+const RESCORE_BATCH = 100;
 
 interface ProposedEngineWeights {
   weights: Record<string, number>;
@@ -68,6 +73,7 @@ export default function ScoringEnginesPage() {
   const [idealBonus, setIdealBonus] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRescoring, setIsRescoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // AI propose: suggests weights/thresholds from a brief. Never auto-saves — the operator
@@ -155,6 +161,32 @@ export default function ScoringEnginesPage() {
     }
   };
 
+  const handleRescoreLeads = async () => {
+    setIsRescoring(true);
+    try {
+      const leads = await apiClient.get<Lead[]>(`/leads?limit=${RESCORE_BATCH}&sort=newest`);
+      const ids = leads
+        .filter((l) => l.approval_status !== "rejected" && l.pipeline_status !== "error" && l.score_band !== null)
+        .map((l) => l.id);
+      if (ids.length === 0) {
+        toast.info("Nothing to re-score", "There are no scored leads yet.");
+        return;
+      }
+      const res = await apiClient.post<{ total_succeeded: number; band_changes?: BandChanges | null }>("/leads/bulk", {
+        action: "rescore",
+        lead_ids: ids,
+      });
+      toast.success(
+        `${res.total_succeeded} lead${res.total_succeeded === 1 ? "" : "s"} re-scored with version ${engine?.active_version}`,
+        describeBandChanges(res.band_changes)
+      );
+    } catch (err: unknown) {
+      toast.error("Couldn't re-score leads", errorMessage(err, "Try again in a moment."));
+    } finally {
+      setIsRescoring(false);
+    }
+  };
+
   const handlePropose = async () => {
     if (!brief.trim()) return;
     setIsProposing(true);
@@ -197,14 +229,17 @@ export default function ScoringEnginesPage() {
                 <input
                   id={`w-${key}`}
                   type="range"
-                  min="0.1"
-                  max="3.0"
+                  min="0"
+                  max="5"
                   step="0.1"
                   value={current}
                   onChange={(e) => setWeights((prev) => ({ ...prev, [key]: parseFloat(e.target.value) }))}
+                  aria-valuetext={current === 0 ? "Off" : `${current.toFixed(1)} times`}
                   className="focus-ring h-1 w-full cursor-pointer accent-accent"
                 />
-                <span className="text-right text-sm font-medium text-fg">{current.toFixed(1)}×</span>
+                <span className={`text-right text-sm font-medium ${current === 0 ? "text-fg-tertiary" : "text-fg"}`}>
+                  {current === 0 ? "Off" : `${current.toFixed(1)}×`}
+                </span>
               </li>
             );
           })}
@@ -249,13 +284,21 @@ export default function ScoringEnginesPage() {
     <>
       <PageHeader
         title={engine.name}
-        description="Weighted average of the 22 signals. Signals without data are skipped, never counted as zero."
+        description="Weighted average of the 22 signals. Signals without data are skipped, never counted as zero. Set a weight to 0 to switch a signal off."
         actions={
           <>
             <Badge variant="info">Version {engine.active_version}</Badge>
             <Button variant="secondary" onClick={fetchEngineData} isLoading={isLoading}>
               {!isLoading && <RotateCw className="h-4 w-4" strokeWidth={1.5} />}
               Discard changes
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void handleRescoreLeads()}
+              isLoading={isRescoring}
+              title="Apply the published version to your latest 100 leads. Uses saved evidence, no credits."
+            >
+              Re-score leads
             </Button>
             <Button onClick={handleSave} isLoading={isSaving} disabled={!thresholdsValid}>
               <Plus className="h-4 w-4" strokeWidth={1.5} />

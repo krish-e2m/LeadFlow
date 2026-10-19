@@ -23,7 +23,9 @@ jobs:
   burst:
     name: Process queued jobs
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Must outlast ARQ_JOB_TIMEOUT (30 min): a search killed mid-run by GitHub would skip the
+    # worker's cleanup and leave the run "running" until the next burst recovers it.
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: apps/api
@@ -56,6 +58,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
 
       - name: Install dependencies
         run: pip install -e .

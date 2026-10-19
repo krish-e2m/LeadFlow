@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.filter_catalog import FilterValidationError, validate_and_normalize_filters
 from app.providers.base import BaseProviderAdapter, ProviderStatus
 from app.scoring.catalog import DEFAULT_SIGNAL_WEIGHTS, SIGNAL_CATEGORIES, SIGNAL_LABELS, validate_engine_weights
+from app.scoring.engine import ranked_findings
 
 
 class OpenRouterError(Exception):
@@ -125,14 +126,12 @@ class OpenRouterAdapter(BaseProviderAdapter):
 
         chosen_model = model or self.default_model
 
-        # Extract top concrete findings to cite
-        active_citations = []
-        for key, details in signal_details.items():
-            if details.get("is_available") and details.get("value", 0) >= 0.7:
-                evidence = details.get("evidence")
-                label = details.get("label")
-                if evidence:
-                    active_citations.append({"signal": key, "label": label, "finding": evidence})
+        # Cite the strongest pain points first (weight x value), never a disabled signal.
+        active_citations = [
+            {"signal": f["signal"], "label": f["label"], "finding": f["finding"]}
+            for f in ranked_findings(signal_details or {})
+            if f["finding"]
+        ]
 
         prompt = f"""You are an elite B2B sales development representative writing a high-converting, personalized cold outreach email.
 

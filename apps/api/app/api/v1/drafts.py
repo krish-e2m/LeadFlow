@@ -24,7 +24,6 @@ from app.security.rbac import AuthenticatedUser, require_org_admin
 from app.services.audit_service import AuditService
 from app.services.draft_service import DraftService
 
-
 router = APIRouter(tags=["AI Draft Studio & Approval"])
 
 

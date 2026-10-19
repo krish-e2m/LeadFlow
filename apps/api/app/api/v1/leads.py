@@ -3,7 +3,8 @@ import io
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
@@ -53,6 +54,7 @@ async def export_leads(
     approval_status: Optional[ApprovalStatus] = None,
     search: Optional[str] = Query(None, description="Search by domain or company name"),
     limit: int = Query(500, ge=1, le=1000, description="Max leads to export (up to 1000)"),
+    include_archived: bool = Query(False, description="Also export archived leads"),
     current_user: AuthenticatedUser = Depends(require_authenticated),
     db: AsyncSession = Depends(get_db),
 ):
@@ -70,13 +72,15 @@ async def export_leads(
 
     stmt = (
         select(Lead)
-        .where(Lead.org_id == current_user.org_id, Lead.deleted_at.is_(None))
+        .where(Lead.org_id == current_user.org_id)
         .options(
             selectinload(Lead.scores),
             selectinload(Lead.contacts),
         )
     )
 
+    if not (include_archived and current_user.role != UserRole.CLIENT_VIEWER):
+        stmt = stmt.where(Lead.deleted_at.is_(None))
     if pipeline_status:
         stmt = stmt.where(Lead.pipeline_status == pipeline_status)
     if score_band:
@@ -121,6 +125,7 @@ async def export_leads(
             "pipeline_status": lead.pipeline_status.value,
             "score_band": lead.score_band.value if lead.score_band else "unscored",
             "approval_status": lead.approval_status.value,
+            "archived": "yes" if lead.deleted_at else "no",
             "overall_score": latest_score.overall_score if latest_score else "",
             "website_subscore": latest_score.website_subscore if latest_score else "",
             "marketing_subscore": latest_score.marketing_subscore if latest_score else "",
@@ -168,6 +173,7 @@ async def export_leads(
         "pipeline_status",
         "score_band",
         "approval_status",
+        "archived",
         "overall_score",
         "website_subscore",
         "marketing_subscore",
@@ -225,6 +231,8 @@ async def bulk_lead_action(
     failed = 0
     now = datetime.now(timezone.utc)
     newly_approved: List[uuid.UUID] = []
+    bands_before: Dict[str, int] = {}
+    bands_after: Dict[str, int] = {}
 
     for lead_id in payload.lead_ids:
         # Query within tenant organization boundary
@@ -255,6 +263,16 @@ async def bulk_lead_action(
                             lead_id=lead_id,
                             success=False,
                             error="Cannot approve disqualified or rejected lead.",
+                        )
+                    )
+                    failed += 1
+                    continue
+                if lead.pipeline_status == PipelineStatus.ERROR:
+                    results.append(
+                        BulkItemResult(
+                            lead_id=lead_id,
+                            success=False,
+                            error="Lead has no audit score yet; open it to approve with a reason.",
                         )
                     )
                     failed += 1
@@ -309,7 +327,11 @@ async def bulk_lead_action(
                     failed += 1
                     continue
 
+                before = lead.score_band.value if lead.score_band else "unscored"
                 await scoring_service.score_lead(lead, engine_id=payload.engine_id)
+                after = lead.score_band.value if lead.score_band else "unscored"
+                bands_before[before] = bands_before.get(before, 0) + 1
+                bands_after[after] = bands_after.get(after, 0) + 1
                 results.append(
                     BulkItemResult(lead_id=lead_id, success=True, status="rescored")
                 )
@@ -353,6 +375,9 @@ async def bulk_lead_action(
         total_failed=failed,
         results=results,
         drafts_queued=drafts_queued,
+        band_changes={"before": bands_before, "after": bands_after}
+        if payload.action == BulkActionType.RESCORE
+        else None,
     )
 
 
@@ -362,14 +387,16 @@ async def list_leads(
     score_band: Optional[ScoreBand] = None,
     approval_status: Optional[ApprovalStatus] = None,
     search: Optional[str] = Query(None, description="Search by domain or company name"),
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    sort: str = Query("score", pattern="^(score|newest)$", description="score (highest first) or newest"),
+    archived: bool = Query(False, description="List archived leads instead of active ones"),
     current_user: AuthenticatedUser = Depends(require_authenticated),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Lists leads for the active organization with multi-attribute filtering.
-    Restricted client_viewers may only observe approved leads.
+    Lists leads for the active organization with multi-attribute filtering, ranked by latest score
+    by default. Restricted client_viewers may only observe approved, non-archived leads.
     """
     # Enforce client_viewer boundary
     effective_approval = approval_status
@@ -385,6 +412,8 @@ async def list_leads(
         search_query=search,
         skip=skip,
         limit=limit,
+        archived=archived and current_user.role != UserRole.CLIENT_VIEWER,
+        sort=sort,
     )
 
 
@@ -395,20 +424,36 @@ async def get_lead(
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieves full lead details including historical scores, technical audits, contacts, and drafts."""
+    is_viewer = current_user.role == UserRole.CLIENT_VIEWER
     repo = LeadRepository(db)
-    lead = await repo.get_with_details(lead_id, org_id=current_user.org_id)
+    lead = await repo.get_with_details(lead_id, org_id=current_user.org_id, include_archived=not is_viewer)
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found.")
 
-    if (
-        current_user.role == UserRole.CLIENT_VIEWER
-        and lead.approval_status != ApprovalStatus.APPROVED
-    ):
+    if is_viewer and lead.approval_status != ApprovalStatus.APPROVED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to unapproved lead."
         )
 
-    return lead
+    # Only the newest enrichment is returned: older versions are kept for history but are
+    # large JSON blobs the UI never shows.
+    latest = await repo.latest_enrichment(lead.id)
+    fields = {
+        name: getattr(lead, name, None)
+        for name in LeadResponse.model_fields
+        if name not in ("archived_at", "overall_score")
+    }
+    return LeadDetailResponse.model_validate(
+        SimpleNamespace(
+            **fields,
+            deleted_at=lead.deleted_at,
+            overall_score=lead.scores[0].overall_score if lead.scores else None,
+            scores=lead.scores,
+            enrichments=[latest] if latest else [],
+            contacts=lead.contacts,
+            drafts=lead.drafts,
+        )
+    )
 
 
 @router.patch("/{lead_id}/approval", response_model=LeadResponse)
@@ -432,7 +477,7 @@ async def update_lead_approval(
     # Workflow Gate: Disqualified leads cannot be silently approved
     is_disqualified = (
         lead.score_band == ScoreBand.DISQUALIFIED
-        or lead.pipeline_status == PipelineStatus.DISQUALIFIED
+        or lead.pipeline_status in (PipelineStatus.DISQUALIFIED, PipelineStatus.ERROR)
         or lead.approval_status == ApprovalStatus.REJECTED
     )
 
@@ -447,8 +492,14 @@ async def update_lead_approval(
     if payload.approval_status == ApprovalStatus.APPROVED:
         lead.approved_by = current_user.id
         lead.approved_at = datetime.now(timezone.utc)
-        if lead.pipeline_status in [PipelineStatus.SCORED, PipelineStatus.SOURCED, PipelineStatus.DISQUALIFIED]:
+        if lead.pipeline_status in [
+            PipelineStatus.SCORED,
+            PipelineStatus.SOURCED,
+            PipelineStatus.DISQUALIFIED,
+            PipelineStatus.ERROR,
+        ]:
             lead.pipeline_status = PipelineStatus.APPROVED
+            lead.error_reason = None
     elif payload.approval_status == ApprovalStatus.REJECTED:
         lead.pipeline_status = PipelineStatus.DISQUALIFIED
 
@@ -506,6 +557,12 @@ async def rescore_lead(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found.")
 
     scoring_service = ScoringService(db)
-    new_score = await scoring_service.score_lead(lead, engine_id=engine_id)
+    try:
+        new_score = await scoring_service.score_lead(lead, engine_id=engine_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This lead has no audit data to re-score yet. Run a search that includes its domain first.",
+        )
     await db.commit()
     return new_score

@@ -3,13 +3,12 @@ import secrets
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import httpx
 from fastapi import HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
@@ -252,16 +251,12 @@ class GoogleAuthService:
                         )
 
                 # Link google_id and update avatar/name if missing
-                changed = False
                 if not user.google_id:
                     user.google_id = profile.sub
-                    changed = True
                 if profile.picture and user.avatar_url != profile.picture:
                     user.avatar_url = profile.picture
-                    changed = True
                 if profile.name and not user.full_name:
                     user.full_name = profile.name
-                    changed = True
 
                 user.last_login_at = datetime.now(timezone.utc)
                 await session.commit()

@@ -122,7 +122,10 @@ export default function LeadDetailPage() {
 
   const handleApprove = () => {
     const needsOverride =
-      lead?.score_band === "disqualified" || lead?.pipeline_status === "disqualified" || lead?.approval_status === "rejected";
+      lead?.score_band === "disqualified" ||
+      lead?.pipeline_status === "disqualified" ||
+      lead?.pipeline_status === "error" ||
+      lead?.approval_status === "rejected";
     if (needsOverride) {
       setOverrideOpen(true);
       return;
@@ -290,7 +293,11 @@ export default function LeadDetailPage() {
             </div>
           </div>
         ) : (
-          <p className="text-sm text-fg-secondary">This lead hasn't been scored yet. Current stage: {lead.pipeline_status}.</p>
+          <p className="text-sm text-fg-secondary">
+            {lead.pipeline_status === "error"
+              ? `We couldn't audit this website, so it has no score.${lead.error_reason ? ` ${lead.error_reason}` : ""}`
+              : `This lead hasn't been scored yet. Current stage: ${lead.pipeline_status}.`}
+          </p>
         )}
       </Card>
 

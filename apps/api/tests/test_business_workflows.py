@@ -450,12 +450,43 @@ async def test_quotas_lead_ingestion_and_per_search_limit(setup_test_tenants, ad
                 session.add(lead)
             await session.commit()
 
-        # 3. Requesting 10 leads when 95 are already consumed (95 + 10 = 105 > 100) -> 429
+        # 3. Requesting 10 leads when 95 are used: the search runs with the 5 that are left.
+        with patch("app.services.search_service.create_pool", new_callable=AsyncMock) as mock_pool:
+            mock_pool.return_value = AsyncMock()
+            res_trimmed = await client.post(
+                "/api/v1/searches",
+                headers={"Authorization": f"Bearer {tokens['org_a_admin']}"},
+                json={
+                    "name": "Over-Quota Search",
+                    "limit": 10,
+                    "query_params": {"industry": "Software"},
+                },
+            )
+            assert res_trimmed.status_code == 202
+            assert "5 leads instead of 10" in res_trimmed.json()["message"]
+            assert mock_pool.return_value.enqueue_job.call_args[0][3] == 5
+
+        # 4. With the month used up, a search is rejected outright.
+        async with session_factory() as session:
+            for i in range(5):
+                session.add(
+                    Lead(
+                        id=uuid.uuid4(),
+                        org_id=ids["org_a_id"],
+                        domain=f"fill{i}-{uuid.uuid4().hex[:4]}.com",
+                        company_name=f"Filler {i}",
+                        pipeline_status=PipelineStatus.SOURCED,
+                        approval_status=ApprovalStatus.PENDING,
+                        created_at=now,
+                    )
+                )
+            await session.commit()
+
         res_quota = await client.post(
             "/api/v1/searches",
             headers={"Authorization": f"Bearer {tokens['org_a_admin']}"},
             json={
-                "name": "Over-Quota Search",
+                "name": "Exhausted Search",
                 "limit": 10,
                 "query_params": {"industry": "Software"},
             },

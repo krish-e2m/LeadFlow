@@ -124,7 +124,10 @@ export default function NewSearchPage() {
         query_params,
       });
 
-      toast.info("Search started", "Leads appear in the table as they are scored.");
+      // The API trims the search to what is left of the monthly quota and says so in its message.
+      const trimmed = res.message.includes("instead of");
+      if (trimmed) toast.info("Search started with fewer leads", res.message);
+      else toast.info("Search started", "Leads appear in the table as they are scored.");
       await apiClient.pollRun(res.run_id, (currentRun) => setActiveRun(currentRun), 1500);
     } catch (err: unknown) {
       setError(errorMessage(err, "The search couldn't be started. Try again in a moment."));

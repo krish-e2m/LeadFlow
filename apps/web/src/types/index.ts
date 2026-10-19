@@ -10,7 +10,8 @@ export type PipelineStatus =
   | "disqualified"
   | "drafting"
   | "drafted"
-  | "synced";
+  | "synced"
+  | "error";
 
 export type ScoreBand =
   | "qualified"
@@ -111,7 +112,8 @@ export interface SignalDetailItem {
   category: "website" | "marketing";
   weight: number;
   value: number | null;
-  status?: "detected" | "not_detected" | "unavailable";
+  status?: "detected" | "not_detected" | "unavailable" | "disabled";
+  enabled?: boolean;
   evidence: string | null;
   provider: string | null;
   is_available: boolean;
@@ -203,6 +205,11 @@ export interface Lead {
   approved_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Latest overall score (list responses). */
+  overall_score?: number | null;
+  /** Why the lead is in the "error" stage (site unreachable, collector failure). */
+  error_reason?: string | null;
+  archived_at?: string | null;
   scores?: Score[];
   enrichments?: Enrichment[];
   contacts?: Contact[];

@@ -1,10 +1,11 @@
 import asyncio
 import ipaddress
+import json
 import re
 import socket
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -39,6 +40,13 @@ DISALLOWED_EXTENSIONS = (
     ".mp4", ".mov", ".zip", ".tar", ".gz", ".exe", ".css", ".js"
 )
 
+# "compatible; <bot>" is the convention Googlebot/Bingbot use: still an honest bot identity, but not
+# rejected by the many naive filters that block any user agent lacking "Mozilla".
+CRAWLER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; LeadFlowBot/1.0; +https://leadflow.local)",
+    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.8",
+}
 
 MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -64,6 +72,82 @@ VIDEO_EMBED_MARKERS = (
     "youtube.com/embed", "youtube-nocookie.com/embed", "player.vimeo.com", "fast.wistia",
     "wistia.com/embed", "loom.com/embed", "loom.com/share",
 )
+
+# URL path sections. Matched on whole path segments, so "/newsletter" is not a news page and a
+# keyword inside the host name (newsmax.com) never counts.
+_BLOG_PATH = re.compile(r"(?:^|/)(?:blog|blogs|news|articles?|insights|resources)(?:/|$|[-_.])", re.I)
+_PRESS_PATH = re.compile(r"(?:^|/)(?:press|newsroom|media|press-releases?|in-the-news)(?:/|$|[-_.])", re.I)
+_CAREERS_PATH = re.compile(r"(?:^|/)(?:careers?|jobs?|join-us|join|work-with-us|openings|vacancies)(?:/|$|[-_.])", re.I)
+_CASE_PATH = re.compile(r"(?:^|/)(?:case-stud\w*|customers?|success-stor\w*|testimonials?|portfolio|our-work|work|results)(?:/|$|[-_.])", re.I)
+_ABOUT_PATH = re.compile(r"(?:^|/)(?:about|about-us|company|our-story|team|who-we-are)(?:/|$|[-_.])", re.I)
+_SERVICE_PATH = re.compile(r"(?:^|/)(?:services?|solutions?|products?|features?|what-we-do)(?:/|$|[-_.])", re.I)
+_CONTACT_PATH = re.compile(r"(?:^|/)(?:contact|contact-us|reach-us|support|get-in-touch)(?:/|$|[-_.])", re.I)
+
+_BLOG_HREF = re.compile(r"href=[\"'][^\"']*/(?:blog|blogs|news|articles?|insights)(?:/|[\"'?#-])", re.I)
+_PRESS_HREF = re.compile(r"href=[\"'][^\"']*/(?:press|newsroom|press-releases?)(?:/|[\"'?#-])", re.I)
+_CASE_HREF = re.compile(r"href=[\"'][^\"']*/(?:case-stud\w*|customers|testimonials|success-stor\w*|portfolio)(?:/|[\"'?#-])", re.I)
+
+# High-intent conversion phrases. A bare "Contact us" nav link is not one; it only counts when it
+# is styled as a button (see _is_button_like).
+STRONG_CTA_PHRASES = (
+    "book a demo", "request a demo", "request demo", "schedule a demo", "get a demo", "get started",
+    "start free", "start your free", "free trial", "sign up", "try now", "try it free", "talk to sales",
+    "contact sales", "get a quote", "get a free quote", "request a quote", "free quote", "get pricing",
+    "free consultation", "book a consultation", "schedule a consultation", "book a call", "schedule a call",
+    "book an appointment", "book appointment", "request an appointment", "schedule an appointment",
+    "book now", "buy now", "shop now", "order now", "call now", "call today", "get a proposal",
+    "request a proposal", "get an estimate", "free estimate",
+)
+SOFT_CTA_PHRASES = (
+    "contact us", "get in touch", "let's talk", "let’s talk", "talk to us", "work with us",
+    "enquire now", "inquire now", "send us a message", "request info",
+)
+_BUTTON_CLASS = re.compile(r"\b(?:btn|button|cta)\b|btn-|button-|-btn|-button|-cta|cta-", re.I)
+
+ANALYTICS_MARKERS = (
+    "googletagmanager.com", "google-analytics.com", "gtag(", "analytics.js", "fbevents.js",
+    "connect.facebook.net", "posthog", "segment.com", "segment.io", "heap.js", "heapanalytics",
+    "plausible.io", "matomo", "piwik", "_paq.push", "hotjar", "clarity.ms", "mixpanel",
+    "js.hs-scripts.com", "js.hs-analytics.net", "usefathom.com", "cdn.usefathom", "umami",
+    "snap.licdn.com", "static.ads-twitter.com", "amplitude.com", "fullstory", "mouseflow",
+    "statcounter", "cloudflareinsights.com", "simpleanalytics",
+)
+LIVE_CHAT_MARKERS = (
+    "intercom", "drift.com", "driftt.com", "crisp.chat", "hubspot-messages", "js.usemessages.com",
+    "zendesk", "zopim", "livechat", "tidio", "tawk.to", "olark", "freshchat", "wchat.freshchat",
+    "chatra", "smartsupp", "userlike", "purechat", "podium.com", "birdeye", "gorgias", "helpscout",
+    "beacon-v2", "kommunicate", "ada.support", "qualified.com", "liveperson", "lpsnmedia",
+    "manychat", "botpress", "chatwoot", "re:amaze", "reamaze", "landbot", "comm100", "jivosite",
+    "chat-widget", "chatbot",
+)
+EMAIL_CAPTURE_MARKERS = (
+    "list-manage.com", "mailchimp", "klaviyo", "convertkit", "hbspt.forms", "mailerlite",
+    "sendinblue", "brevo", "constantcontact", "substack.com/embed", "beehiiv", "aweber", "getresponse",
+)
+ATS_MARKERS = (
+    "boards.greenhouse.io", "greenhouse.io/embed", "jobs.lever.co", "apply.workable.com", "workable.com",
+    "jobs.ashbyhq.com", "bamboohr.com/jobs", "recruitee.com", "smartrecruiters.com", "jobvite.com",
+    "breezy.hr", "myworkdayjobs.com", "teamtailor.com", "jazzhr", "applytojob.com", "personio",
+)
+_LEGACY_GENERATORS = (
+    (re.compile(r"wordpress\s+[1-4]\.", re.I), "end-of-life WordPress major version"),
+    (re.compile(r"drupal\s+[5-7]\b", re.I), "end-of-life Drupal version"),
+    (re.compile(r"joomla", re.I), "Joomla CMS"),
+    (re.compile(r"magento\s+1\b", re.I), "end-of-life Magento 1"),
+    (re.compile(r"typo3\s+[1-6]\b", re.I), "end-of-life TYPO3 version"),
+    (re.compile(r"frontpage|dreamweaver|iweb|golive|netobjects|homestead", re.I), "legacy site builder"),
+)
+_LEGACY_SOURCE_MARKERS = (
+    (re.compile(r"jquery(?:[/-]|(?:\.min)?\.js\?ver=)1\.\d", re.I), "Archaic jQuery 1.x library detected in page source"),
+    (re.compile(r"href=[\"'][^\"']+\.cfm(?:[\"'?#])", re.I), "ColdFusion (.cfm) pages detected"),
+    (re.compile(r"href=[\"'][^\"']+\.asp(?:[\"'?#])", re.I), "Classic ASP (.asp) pages detected"),
+    (re.compile(r"\.swf[\"'?]|shockwave-flash", re.I), "Adobe Flash content detected"),
+)
+
+_MICRODATA = re.compile(r"itemtype=[\"']https?://schema\.org/", re.I)
+
+_DNS_CACHE: Dict[str, Tuple[float, bool]] = {}
+_DNS_CACHE_TTL_SECONDS = 300.0
 
 
 def _safe_date(year: int, month: int, day: int) -> Optional[datetime]:
@@ -115,6 +199,25 @@ def _url_path(page: Dict[str, Any]) -> str:
     return urlparse(page.get("url", "")).path.lower()
 
 
+def _resolves_to_public_ips(hostname: str) -> bool:
+    now = time.monotonic()
+    cached = _DNS_CACHE.get(hostname)
+    if cached and cached[0] > now:
+        return cached[1]
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+    except Exception:
+        return False
+    safe = bool(addr_info)
+    for _, _, _, _, sockaddr in addr_info:
+        ip_obj = ipaddress.ip_address(sockaddr[0])
+        if any(ip_obj in net for net in DISALLOWED_NETWORKS):
+            safe = False
+            break
+    _DNS_CACHE[hostname] = (now + _DNS_CACHE_TTL_SECONDS, safe)
+    return safe
+
+
 def is_safe_url(url: str) -> bool:
     """Validates URL against SSRF, internal IPs, and metadata services."""
     try:
@@ -127,17 +230,57 @@ def is_safe_url(url: str) -> bool:
         hostname = hostname.lower()
         if hostname in DISALLOWED_HOSTS or hostname.endswith((".local", ".internal", ".lan")):
             return False
-
-        addr_info = socket.getaddrinfo(hostname, None)
-        for _, _, _, _, sockaddr in addr_info:
-            ip_str = sockaddr[0]
-            ip_obj = ipaddress.ip_address(ip_str)
-            for net in DISALLOWED_NETWORKS:
-                if ip_obj in net:
-                    return False
-        return True
+        return _resolves_to_public_ips(hostname)
     except Exception:
         return False
+
+
+async def _check_url(url: str) -> bool:
+    """is_safe_url resolves DNS with a blocking call; run it off the event loop."""
+    return await asyncio.to_thread(is_safe_url, url)
+
+
+def _parse_html(html_text: str) -> Tuple[BeautifulSoup, str]:
+    soup = BeautifulSoup(html_text, "html.parser")
+    body_text = soup.body.get_text(separator=" ", strip=True) if soup.body else ""
+    return soup, body_text
+
+
+def _is_button_like(tag: Any) -> bool:
+    if tag.name == "button":
+        return True
+    if tag.name == "input" and (tag.get("type") or "").lower() in ("submit", "button"):
+        return True
+    classes = " ".join(tag.get("class") or []) if isinstance(tag.get("class"), list) else str(tag.get("class") or "")
+    attrs = f"{classes} {tag.get('role') or ''} {tag.get('id') or ''}"
+    return bool(_BUTTON_CLASS.search(attrs))
+
+
+def _jsonld_types(soup: Optional[BeautifulSoup]) -> List[str]:
+    if soup is None:
+        return []
+    types: List[str] = []
+    for block in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = block.string or block.get_text() or ""
+        try:
+            data = json.loads(raw)
+        except Exception:
+            types.append("unparsed")
+            continue
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+            elif isinstance(node, dict):
+                t = node.get("@type")
+                if isinstance(t, str):
+                    types.append(t)
+                elif isinstance(t, list):
+                    types.extend(str(x) for x in t)
+                if isinstance(node.get("@graph"), list):
+                    stack.extend(node["@graph"])
+    return types
 
 
 class WebCrawlerAdapter(BaseProviderAdapter):
@@ -172,7 +315,7 @@ class WebCrawlerAdapter(BaseProviderAdapter):
         )
 
     async def _fetch_with_firecrawl_or_fallback(
-        self, client: httpx.AsyncClient, url: str
+        self, client: httpx.AsyncClient, url: str, meta: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """Attempts Firecrawl first if configured; falls back safely to internal httpx crawler."""
         if self.firecrawl.is_configured():
@@ -180,8 +323,9 @@ class WebCrawlerAdapter(BaseProviderAdapter):
                 fc_res = await self.firecrawl.scrape_url(url, formats=["markdown", "rawHtml", "links"])
                 if fc_res.get("success") and fc_res.get("html"):
                     rendered_html = fc_res["html"]
-                    soup = BeautifulSoup(rendered_html, "html.parser")
-                    body_text = soup.body.get_text(separator=" ", strip=True) if soup.body else ""
+                    soup, body_text = await asyncio.to_thread(_parse_html, rendered_html)
+                    if meta is not None:
+                        meta["status_code"] = fc_res.get("status_code", 200)
                     return {
                         "url": fc_res.get("url") or url,
                         "status_code": fc_res.get("status_code", 200),
@@ -201,41 +345,37 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             except Exception as e:
                 logger.warning(f"Firecrawl scrape exception for {url}, falling back to httpx: {str(e)}")
 
-        return await self._safe_fetch_page(client, url)
+        return await self._safe_fetch_page(client, url, meta)
 
     async def _safe_fetch_page(
-        self, client: httpx.AsyncClient, url: str
+        self, client: httpx.AsyncClient, url: str, meta: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
-        """Fetches a single page with SSRF check, redirect validation, and size capping."""
+        """
+        Fetches a single page with SSRF check, redirect validation, and size capping. `meta`, when
+        given, records the last HTTP status seen so a blocked site can be told apart from a dead one.
+        """
         current_url = url
         for _ in range(5):  # Max 5 redirect hops
-            if not is_safe_url(current_url):
+            if not await _check_url(current_url):
                 return None
 
             try:
-                response = await client.get(
-                    current_url,
-                    headers={"User-Agent": "LeadFlowBot/1.0 (+https://leadflow.local)"},
-                    follow_redirects=False,
-                )
+                response = await client.get(current_url, headers=CRAWLER_HEADERS, follow_redirects=False)
+                if meta is not None:
+                    meta["status_code"] = response.status_code
                 if response.is_redirect and "location" in response.headers:
-                    redirect_target = urljoin(current_url, response.headers["location"])
-                    current_url = redirect_target
+                    current_url = urljoin(current_url, response.headers["location"])
                     continue
 
                 if response.status_code != 200:
                     return None
 
-                # Check Content-Type & length
                 content_type = response.headers.get("content-type", "").lower()
                 if "text/html" not in content_type and "application/xhtml" not in content_type:
                     return None
 
-                content_bytes = response.content[: self.MAX_RESPONSE_BYTES]
-                html_text = content_bytes.decode(errors="replace")
-                soup = BeautifulSoup(html_text, "html.parser")
-                body_text = soup.body.get_text(separator=" ", strip=True) if soup.body else ""
-
+                html_text = response.content[: self.MAX_RESPONSE_BYTES].decode(errors="replace")
+                soup, body_text = await asyncio.to_thread(_parse_html, html_text)
                 return {
                     "url": str(response.url),
                     "status_code": response.status_code,
@@ -252,8 +392,13 @@ class WebCrawlerAdapter(BaseProviderAdapter):
     def _discover_relevant_links(
         self, homepage_soup: BeautifulSoup, base_url: str, domain: str
     ) -> List[str]:
-        """Discovers up to 7 distinct relevant internal pages prioritized by business intent."""
+        """
+        Picks up to 7 internal pages, taking one from each evidence bucket in turn (careers, blog,
+        case studies, press, ...) so a site with many About/Service links still gets its blog and
+        careers pages audited. Shallow hub pages (/blog) are preferred over individual posts.
+        """
         clean_domain = domain.lower()
+        bare_domain = clean_domain[4:] if clean_domain.startswith("www.") else clean_domain
 
         candidate_links: Set[str] = set()
         for a_tag in homepage_soup.find_all("a", href=True):
@@ -263,64 +408,44 @@ class WebCrawlerAdapter(BaseProviderAdapter):
 
             resolved = urljoin(base_url, href)
             parsed_res = urlparse(resolved)
-
-            # Check domain match (same domain or subdomain)
             res_host = (parsed_res.hostname or "").lower()
-            if res_host != clean_domain and not res_host.endswith(f".{clean_domain}"):
+            if res_host not in (clean_domain, bare_domain) and not res_host.endswith(f".{bare_domain}"):
                 continue
-
             if parsed_res.path.lower().endswith(DISALLOWED_EXTENSIONS):
                 continue
 
             clean_url = f"{parsed_res.scheme}://{parsed_res.netloc}{parsed_res.path}"
-            if clean_url != base_url and clean_url != f"{base_url}/":
+            if clean_url.rstrip("/") != base_url.rstrip("/"):
                 candidate_links.add(clean_url)
 
-        # Prioritize relevant buckets
-        buckets: Dict[str, List[str]] = {
-            "careers": [],
-            "case_studies": [],
-            "about": [],
-            "services": [],
-            "blog": [],
-            "contact": [],
-            "other": [],
-        }
-
-        career_patterns = re.compile(r"(careers?|jobs?|join|work-with-us|openings)", re.I)
-        case_study_patterns = re.compile(r"(case-stud|customers?|success|testimonials?|results)", re.I)
-        about_patterns = re.compile(r"(about|company|our-story|team)", re.I)
-        service_patterns = re.compile(r"(services?|solutions?|products?|features?)", re.I)
-        blog_patterns = re.compile(r"(blog|news|articles?|insights?|press)", re.I)
-        contact_patterns = re.compile(r"(contact|reach-us|support)", re.I)
-
-        for link in candidate_links:
+        bucket_patterns = [
+            ("careers", _CAREERS_PATH),
+            ("blog", _BLOG_PATH),
+            ("case_studies", _CASE_PATH),
+            ("press", _PRESS_PATH),
+            ("about", _ABOUT_PATH),
+            ("services", _SERVICE_PATH),
+            ("contact", _CONTACT_PATH),
+        ]
+        buckets: Dict[str, List[str]] = {name: [] for name, _ in bucket_patterns}
+        buckets["other"] = []
+        for link in sorted(candidate_links, key=lambda u: (urlparse(u).path.count("/"), len(u), u)):
             path = urlparse(link).path
-            if career_patterns.search(path):
-                buckets["careers"].append(link)
-            elif case_study_patterns.search(path):
-                buckets["case_studies"].append(link)
-            elif about_patterns.search(path):
-                buckets["about"].append(link)
-            elif service_patterns.search(path):
-                buckets["services"].append(link)
-            elif blog_patterns.search(path):
-                buckets["blog"].append(link)
-            elif contact_patterns.search(path):
-                buckets["contact"].append(link)
+            for name, pattern in bucket_patterns:
+                if pattern.search(path):
+                    buckets[name].append(link)
+                    break
             else:
                 buckets["other"].append(link)
 
         selected: List[str] = []
-        for bucket in ["careers", "case_studies", "about", "services", "blog", "contact", "other"]:
-            for u in buckets[bucket]:
-                if u not in selected:
-                    selected.append(u)
-                if len(selected) >= (self.MAX_PAGES - 1):
-                    break
-            if len(selected) >= (self.MAX_PAGES - 1):
-                break
-
+        order = [name for name, _ in bucket_patterns] + ["other"]
+        while len(selected) < self.MAX_PAGES - 1 and any(buckets[name] for name in order):
+            for name in order:
+                if buckets[name] and len(selected) < self.MAX_PAGES - 1:
+                    link = buckets[name].pop(0)
+                    if link not in selected:
+                        selected.append(link)
         return selected
 
     async def crawl_domain(self, domain: str) -> Dict[str, Any]:
@@ -346,11 +471,10 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "crawled_urls": [],
         }
 
-        extracted_signals: Dict[str, Any] = {}
-
-        if not is_safe_url(target_url):
-            err_msg = f"Security block: {target_url} resolves to internal or restricted IP."
+        if not await _check_url(target_url):
+            err_msg = f"Security block: {target_url} does not resolve to a public address."
             provenance["error"] = err_msg
+            provenance["reachable"] = False
             return self._build_failed_payload(err_msg, provenance)
 
         crawled_pages: List[Dict[str, Any]] = []
@@ -360,16 +484,25 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             start_time = time.time()
             async with httpx.AsyncClient(timeout=self.TIMEOUT_SECONDS, verify=True) as client:
                 # 1. Fetch Homepage
-                homepage_data = await self._fetch_with_firecrawl_or_fallback(client, target_url)
+                fetch_meta: Dict[str, Any] = {}
+                homepage_data = await self._fetch_with_firecrawl_or_fallback(client, target_url, fetch_meta)
                 if not homepage_data and target_url.startswith("https://"):
-                    # Fallback to HTTP if HTTPS fails
                     http_target = f"http://{base_domain}"
-                    if is_safe_url(http_target):
-                        homepage_data = await self._fetch_with_firecrawl_or_fallback(client, http_target)
+                    if await _check_url(http_target):
+                        homepage_data = await self._fetch_with_firecrawl_or_fallback(client, http_target, fetch_meta)
 
                 if not homepage_data:
-                    err_msg = f"Unable to reach domain {base_domain} within {self.TIMEOUT_SECONDS}s."
+                    http_status = fetch_meta.get("status_code")
+                    if http_status:
+                        err_msg = (
+                            f"{base_domain} answered HTTP {http_status} and did not serve its homepage "
+                            "(it may block automated audits)."
+                        )
+                    else:
+                        err_msg = f"Unable to reach domain {base_domain} within {self.TIMEOUT_SECONDS}s."
                     provenance["error"] = err_msg
+                    provenance["http_status"] = http_status
+                    provenance["reachable"] = bool(http_status)
                     return self._build_failed_payload(err_msg, provenance)
 
                 crawled_pages.append(homepage_data)
@@ -378,18 +511,20 @@ class WebCrawlerAdapter(BaseProviderAdapter):
 
                 provenance["status_code"] = homepage_data["status_code"]
                 provenance["ssl_valid"] = homepage_data["url"].startswith("https://")
+                provenance["reachable"] = True
                 provenance["engine"] = homepage_data.get("scraped_by", "httpx")
                 if homepage_data.get("markdown"):
-                    provenance["markdown"] = homepage_data["markdown"]
+                    provenance["homepage_markdown_chars"] = len(homepage_data["markdown"])
                 provenance["crawled_urls"].append(homepage_data["url"])
 
                 # 2. Discover Relevant Internal Pages
+                # Follow the site where it actually lives (acme.com may redirect to acmecorp.com).
+                site_host = urlparse(homepage_data["url"]).hostname or base_domain
                 discovered_links = self._discover_relevant_links(
-                    homepage_data["soup"], homepage_data["url"], base_domain
+                    homepage_data["soup"], homepage_data["url"], site_host
                 )
 
-                # 3. Fetch Discovered Pages concurrently with bounded Firecrawl usage
-                # Configurable max subpages to attempt via Firecrawl (prioritizes high-value pages like careers)
+                # 3. Fetch discovered pages concurrently; Firecrawl only for the first few (credits)
                 max_fc_subpages = getattr(settings, "FIRECRAWL_MAX_SUBPAGES", 2)
                 sem = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
 
@@ -410,12 +545,11 @@ class WebCrawlerAdapter(BaseProviderAdapter):
                 subpage_results = await asyncio.gather(*subpage_tasks, return_exceptions=True)
 
                 for res in subpage_results:
-                    if isinstance(res, dict) and res is not None:
+                    if isinstance(res, dict):
                         crawled_pages.append(res)
                         provenance["crawled_urls"].append(res["url"])
 
-                elapsed_ms = int((time.time() - start_time) * 1000)
-                provenance["response_time_ms"] = elapsed_ms
+                provenance["response_time_ms"] = int((time.time() - start_time) * 1000)
                 provenance["pages_crawled_count"] = len(crawled_pages)
                 provenance["pages_scraped_by"] = {
                     p["url"]: p.get("scraped_by", "httpx") for p in crawled_pages
@@ -424,10 +558,11 @@ class WebCrawlerAdapter(BaseProviderAdapter):
                     1 for p in crawled_pages if p.get("scraped_by") == "firecrawl"
                 )
 
-                # 4. Extract Technical & Marketing Signals across all crawled pages
-                extracted_signals = self._evaluate_signals_across_pages(
-                    crawled_pages, provenance["ssl_valid"], base_domain
-                )
+            # 4. Signal extraction is CPU-bound HTML work; keep it off the event loop so parallel
+            # lead processing isn't stalled behind one large page.
+            extracted_signals = await asyncio.to_thread(
+                self._evaluate_signals_across_pages, crawled_pages, provenance["ssl_valid"], base_domain
+            )
 
         except Exception as e:
             provenance["error"] = str(e)
@@ -460,15 +595,10 @@ class WebCrawlerAdapter(BaseProviderAdapter):
         home_url = homepage["url"]
         total_pages = len(pages)
 
-        combined_html = " ".join(p.get("html", "").lower() for p in pages)
+        # Lower-case each page once; every marker check below reuses these.
+        lowered = [p.get("html", "").lower() for p in pages]
+        combined_html = " ".join(lowered)
         combined_markdown = " ".join(p.get("markdown", "").lower() for p in pages)
-        all_buttons: List[str] = []
-        for p in pages:
-            if p.get("soup"):
-                for b in p["soup"].find_all(["button", "a"]):
-                    text = b.get_text().strip().lower()
-                    if text:
-                        all_buttons.append(text)
 
         signals: Dict[str, Any] = {}
 
@@ -482,31 +612,32 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": home_url,
         }
 
-        # 2. legacy_platform (1.5)
-        legacy_detected = False
-        legacy_evidence = f"Modern framework detected across {total_pages} crawled pages"
+        # 2. legacy_platform (1.5): end-of-life CMS generators, legacy server tech, archaic libraries
+        legacy_evidence: Optional[str] = None
         legacy_source = home_url
-        legacy_markers = ["wordpress 4", "wordpress 3", "drupal 7", "joomla", "magento 1", "typo3 4"]
-
-        for p in pages:
-            if p.get("soup"):
-                generator = p["soup"].find("meta", attrs={"name": "generator"})
-                if generator and "content" in generator.attrs:
-                    gen_content = generator["content"].lower()
-                    if any(m in gen_content for m in legacy_markers):
-                        legacy_detected = True
-                        legacy_evidence = f"Legacy CMS generator '{generator['content']}' detected"
+        for p, p_lower in zip(pages, lowered):
+            soup = p.get("soup")
+            generator = soup.find("meta", attrs={"name": "generator"}) if soup is not None else None
+            gen_content = generator.get("content", "") if generator else ""
+            if gen_content:
+                for pattern, label in _LEGACY_GENERATORS:
+                    if pattern.search(gen_content):
+                        legacy_evidence = f"Legacy CMS generator '{gen_content}' detected ({label})"
                         legacy_source = p["url"]
                         break
-            if "jquery/1." in p["html"].lower() or "jquery-1." in p["html"].lower():
-                legacy_detected = True
-                legacy_evidence = "Archaic jQuery 1.x library detected in page source"
-                legacy_source = p["url"]
+            if not legacy_evidence:
+                for pattern, label in _LEGACY_SOURCE_MARKERS:
+                    if pattern.search(p_lower):
+                        legacy_evidence = label
+                        legacy_source = p["url"]
+                        break
+            if legacy_evidence:
                 break
 
         signals["legacy_platform"] = {
-            "value": 1.0 if legacy_detected else 0.0,
-            "evidence": legacy_evidence,
+            "value": 1.0 if legacy_evidence else 0.0,
+            "evidence": legacy_evidence
+            or f"No end-of-life CMS or outdated framework markers across {total_pages} crawled pages",
             "provider": self.name,
             "source_url": legacy_source,
         }
@@ -533,47 +664,44 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": old_source,
         }
 
-        # 4. weak_ctas (1.0)
-        cta_keywords = [
-            "book a demo", "get started", "schedule", "contact us", "free trial",
-            "request demo", "talk to sales", "start free", "sign up", "try now"
-        ]
-        found_cta = None
-        cta_source = home_url
-        for p in pages:
-            if p.get("soup"):
-                for b in p["soup"].find_all(["button", "a"]):
-                    txt = b.get_text().strip().lower()
-                    for kw in cta_keywords:
-                        if kw in txt:
-                            found_cta = txt
-                            cta_source = p["url"]
-                            break
-                    if found_cta:
-                        break
-            if found_cta:
-                break
+        # 4. weak_ctas (1.0): the homepage is the conversion page, so judge it on its own.
+        strong_ctas: List[str] = []
+        soft_cta: Optional[str] = None
+        if home_soup is not None:
+            for el in home_soup.find_all(["a", "button", "input"]):
+                txt = (el.get("value") if el.name == "input" else el.get_text(" ", strip=True)) or ""
+                txt = txt.strip().lower()
+                if not txt or len(txt) > 80:
+                    continue
+                strong = next((kw for kw in STRONG_CTA_PHRASES if kw in txt), None)
+                if strong:
+                    if strong not in strong_ctas:
+                        strong_ctas.append(strong)
+                elif not soft_cta and _is_button_like(el) and any(kw in txt for kw in SOFT_CTA_PHRASES):
+                    soft_cta = txt
+        home_markdown_lower = homepage.get("markdown", "").lower()
+        if not strong_ctas and home_markdown_lower:
+            strong_ctas = [kw for kw in STRONG_CTA_PHRASES if kw in home_markdown_lower][:3]
 
-        # If not found in DOM elements, inspect clean Markdown action links / callout text across pages
-        if not found_cta:
-            for p in pages:
-                p_md = p.get("markdown", "").lower()
-                if p_md:
-                    for kw in cta_keywords:
-                        if kw in p_md:
-                            found_cta = kw
-                            cta_source = p["url"]
-                            break
-                    if found_cta:
-                        break
-
+        if strong_ctas:
+            cta_value = 0.0
+            cta_evidence = f"High-intent conversion CTA found: '{strong_ctas[0]}' at {home_url}"
+            if len(strong_ctas) > 1:
+                cta_evidence += f" ({len(strong_ctas)} distinct CTAs)"
+        elif soft_cta:
+            cta_value = 0.0
+            cta_evidence = f"Conversion button found: '{soft_cta}' at {home_url} (no high-intent offer such as a demo, quote or trial)"
+        else:
+            cta_value = 1.0
+            cta_evidence = (
+                f"No prominent conversion CTA on the homepage {home_url}: no demo, quote, trial or booking "
+                "button, and no styled contact button"
+            )
         signals["weak_ctas"] = {
-            "value": 0.0 if found_cta else 1.0,
-            "evidence": f"High-intent conversion CTA found: '{found_cta}' at {cta_source}"
-            if found_cta
-            else f"No prominent conversion CTA identified across {total_pages} crawled pages",
+            "value": cta_value,
+            "evidence": cta_evidence,
             "provider": self.name,
-            "source_url": cta_source,
+            "source_url": home_url,
         }
 
         # 5. not_mobile_friendly (0.8)
@@ -588,8 +716,7 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": home_url,
         }
 
-        # 6. thin_content (0.7)
-        # Use clean Markdown if provided by Firecrawl, falling back to body_text from HTML
+        # 6. thin_content (0.7): rendered Markdown word count when Firecrawl supplied it
         home_markdown = homepage.get("markdown", "").strip()
         if home_markdown:
             home_words = len(re.findall(r"\b[\w'-]+\b", home_markdown))
@@ -609,16 +736,12 @@ class WebCrawlerAdapter(BaseProviderAdapter):
         }
 
         # 7. no_analytics (0.6)
-        analytics_patterns = ["googletagmanager.com", "google-analytics.com", "gtag(", "fbevents.js", "posthog", "segment.com", "heap.js"]
         found_analytics = None
         analytics_source = home_url
-        for p in pages:
-            for pat in analytics_patterns:
-                if pat in p["html"].lower():
-                    found_analytics = pat
-                    analytics_source = p["url"]
-                    break
+        for p, p_lower in zip(pages, lowered):
+            found_analytics = next((m for m in ANALYTICS_MARKERS if m in p_lower), None)
             if found_analytics:
+                analytics_source = p["url"]
                 break
 
         signals["no_analytics"] = {
@@ -630,32 +753,35 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": analytics_source,
         }
 
-        # 8. accessibility (0.6)
-        total_imgs = sum(len(p["soup"].find_all("img")) for p in pages)
-        missing_alt = sum(len([img for img in p["soup"].find_all("img") if not img.get("alt")]) for p in pages)
-        has_lang = bool(home_soup.find("html", attrs={"lang": True}))
+        # 8. accessibility (0.6). alt="" is valid for decorative images (WCAG); only a missing
+        # alt attribute counts against the page.
+        total_imgs = 0
+        missing_alt = 0
+        for p in pages:
+            if p.get("soup") is None:
+                continue
+            imgs = p["soup"].find_all("img")
+            total_imgs += len(imgs)
+            missing_alt += sum(1 for img in imgs if img.get("alt") is None)
+        has_lang = bool(home_soup.find("html", attrs={"lang": True})) if home_soup is not None else False
         is_accessible = (missing_alt == 0 or (total_imgs > 0 and (missing_alt / total_imgs) < 0.35)) and has_lang
 
         signals["accessibility"] = {
             "value": 0.0 if is_accessible else 1.0,
-            "evidence": f"Accessibility checks passed: HTML lang present, {total_imgs - missing_alt}/{total_imgs} images have alt tags"
+            "evidence": f"Accessibility checks passed: HTML lang present, {total_imgs - missing_alt}/{total_imgs} images have alt attributes"
             if is_accessible
-            else f"Accessibility issues: {missing_alt}/{total_imgs} images lack alt tags, HTML lang: {has_lang} at {home_url}",
+            else f"Accessibility issues: {missing_alt}/{total_imgs} images lack alt attributes, HTML lang: {has_lang} at {home_url}",
             "provider": self.name,
             "source_url": home_url,
         }
 
         # 9. no_live_chat (0.5)
-        chat_patterns = ["intercom", "drift.com", "crisp.chat", "hubspot-messages", "zendesk", "livechat", "tidio"]
         found_chat = None
         chat_source = home_url
-        for p in pages:
-            for pat in chat_patterns:
-                if pat in p["html"].lower():
-                    found_chat = pat
-                    chat_source = p["url"]
-                    break
+        for p, p_lower in zip(pages, lowered):
+            found_chat = next((m for m in LIVE_CHAT_MARKERS if m in p_lower), None)
             if found_chat:
+                chat_source = p["url"]
                 break
 
         signals["no_live_chat"] = {
@@ -667,10 +793,10 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": chat_source,
         }
 
-        # 10. poor_seo (1.4)
-        title_tag = home_soup.find("title")
-        meta_desc = home_soup.find("meta", attrs={"name": "description"})
-        h1_tags = home_soup.find_all("h1")
+        # 10. poor_seo (1.4): on-page basics (DataForSEO's organic data replaces this when configured)
+        title_tag = home_soup.find("title") if home_soup is not None else None
+        meta_desc = home_soup.find("meta", attrs={"name": "description"}) if home_soup is not None else None
+        h1_tags = home_soup.find_all("h1") if home_soup is not None else []
         seo_issues = []
         if not title_tag or len(title_tag.get_text().strip()) < 15:
             seo_issues.append("short or missing title tag")
@@ -688,22 +814,32 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": home_url,
         }
 
-        # 11. poor_aeo_geo (1.0)
-        json_ld = home_soup.find_all("script", attrs={"type": "application/ld+json"})
-        og_tags = home_soup.find_all("meta", attrs={"property": re.compile(r"^og:")})
-        has_schema = len(json_ld) > 0 or len(og_tags) >= 2
+        # 11. poor_aeo_geo (1.0): structured data answer/generative engines can read. OpenGraph
+        # tags are for social previews and don't count.
+        schema_types: List[str] = []
+        schema_source = home_url
+        for p in pages:
+            found_types = _jsonld_types(p.get("soup"))
+            if found_types:
+                schema_types = found_types
+                schema_source = p["url"]
+                break
+        if not schema_types and _MICRODATA.search(combined_html):
+            schema_types = ["microdata"]
+        has_schema = bool(schema_types)
+        shown_types = ", ".join(dict.fromkeys(t for t in schema_types if t != "unparsed")) or "structured data"
         signals["poor_aeo_geo"] = {
             "value": 0.0 if has_schema else 1.0,
-            "evidence": f"Structured Schema / OpenGraph data found ({len(json_ld)} JSON-LD blocks, {len(og_tags)} OG tags) at {home_url}"
+            "evidence": f"Schema.org structured data found ({shown_types}) at {schema_source}"
             if has_schema
-            else f"Missing Schema.org JSON-LD microdata at {home_url}",
+            else f"No Schema.org JSON-LD or microdata across {total_pages} crawled pages",
             "provider": self.name,
-            "source_url": home_url,
+            "source_url": schema_source,
         }
 
         # 12. stale_blog (1.1): none, or newest post older than 6 months, is stale
         now_utc = datetime.now(timezone.utc)
-        blog_page = next((p for p in pages if re.search(r"(blog|news|articles|insights)", _url_path(p))), None)
+        blog_page = next((p for p in pages[1:] if _BLOG_PATH.search(_url_path(p))), None)
         if blog_page:
             newest = latest_content_date(blog_page)
             if newest is None:
@@ -727,10 +863,12 @@ class WebCrawlerAdapter(BaseProviderAdapter):
                     "source_url": blog_page["url"],
                 }
         else:
-            has_blog_link = any(kw in combined_html or kw in combined_markdown for kw in ["/blog", "/news", "/articles"])
+            has_blog_link = bool(_BLOG_HREF.search(combined_html)) or any(
+                kw in combined_markdown for kw in ("/blog)", "/blog/", "/news)", "/news/", "/articles")
+            )
             signals["stale_blog"] = {
                 "value": 0.0 if has_blog_link else 1.0,
-                "evidence": "Blog hub link detected on site"
+                "evidence": "Blog hub link detected on site (post dates not checked)"
                 if has_blog_link
                 else f"No active blog or resource hub detected across {total_pages} crawled pages",
                 "provider": self.name,
@@ -738,8 +876,8 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             }
 
         # 13. no_press (0.7): none, or newest release older than 1 year, is flagged
-        press_page = next((p for p in pages if re.search(r"(press|newsroom|media)", _url_path(p))), None)
-        has_press = bool(press_page or any(kw in combined_html or kw in combined_markdown for kw in ["/press", "/newsroom", "press release"]))
+        press_page = next((p for p in pages[1:] if _PRESS_PATH.search(_url_path(p))), None)
+        has_press = bool(press_page or _PRESS_HREF.search(combined_html) or "press release" in combined_html or "press release" in combined_markdown)
         press_value = 0.0 if has_press else 1.0
         press_evidence = (
             f"Press/media section detected at {press_page['url'] if press_page else home_url}"
@@ -764,8 +902,8 @@ class WebCrawlerAdapter(BaseProviderAdapter):
         }
 
         # 14. no_case_studies (0.8)
-        case_page = next((p for p in pages if re.search(r"(case-stud|customers|success|testimonial)", _url_path(p))), None)
-        has_cases = bool(case_page or any(kw in combined_html or kw in combined_markdown for kw in ["/case-studies", "/customers", "/testimonials"]))
+        case_page = next((p for p in pages[1:] if _CASE_PATH.search(_url_path(p))), None)
+        has_cases = bool(case_page or _CASE_HREF.search(combined_html) or "case stud" in combined_markdown)
         signals["no_case_studies"] = {
             "value": 0.0 if has_cases else 1.0,
             "evidence": f"Customer case studies detected at {case_page['url'] if case_page else home_url}"
@@ -775,12 +913,11 @@ class WebCrawlerAdapter(BaseProviderAdapter):
             "source_url": case_page["url"] if case_page else home_url,
         }
 
-        # 15. no_video (0.5)
+        # 15. no_video (0.5). Only real embeds count; a footer link to a channel is not marketing video.
         has_video = False
         video_source = home_url
-        # Only real embeds count; a footer link to a YouTube channel is not marketing video.
-        for p in pages:
-            if p.get("soup") and (p["soup"].find_all("video") or any(v in p.get("html", "").lower() for v in VIDEO_EMBED_MARKERS)):
+        for p, p_lower in zip(pages, lowered):
+            if (p.get("soup") is not None and p["soup"].find("video")) or any(v in p_lower for v in VIDEO_EMBED_MARKERS):
                 has_video = True
                 video_source = p["url"]
                 break
@@ -796,7 +933,6 @@ class WebCrawlerAdapter(BaseProviderAdapter):
 
         # 16. weak_social (0.9)
         social_profiles = [name for name, pat in SOCIAL_PATTERNS.items() if pat.search(combined_html)]
-
         has_social = len(social_profiles) > 0
         signals["weak_social"] = {
             "value": 0.0 if has_social else 1.0,
@@ -808,12 +944,19 @@ class WebCrawlerAdapter(BaseProviderAdapter):
         }
 
         # 17. weak_email_capture (0.6)
-        has_email = any(p.get("soup") and p["soup"].find("input", attrs={"type": "email"}) for p in pages) or (
-            "newsletter" in combined_html and "subscribe" in combined_html
+        email_marker = next((m for m in EMAIL_CAPTURE_MARKERS if m in combined_html), None)
+        has_email = (
+            any(p.get("soup") is not None and p["soup"].find("input", attrs={"type": "email"}) for p in pages)
+            or ("newsletter" in combined_html and "subscribe" in combined_html)
+            or bool(email_marker)
         )
         signals["weak_email_capture"] = {
             "value": 0.0 if has_email else 1.0,
-            "evidence": "Email capture or newsletter form present on site"
+            "evidence": (
+                f"Email capture form present on site ({email_marker})"
+                if email_marker
+                else "Email capture or newsletter form present on site"
+            )
             if has_email
             else f"No email capture or lead magnet form found across {total_pages} crawled pages",
             "provider": self.name,
@@ -821,32 +964,49 @@ class WebCrawlerAdapter(BaseProviderAdapter):
         }
 
         # 18. hiring (1.1)
-        # Canonical rule: If careers page found with job listings -> 1.0 (hiring).
-        # If careers page found but no listings -> 0.0 (not hiring).
-        # If no careers page found -> None (unavailable; do NOT claim company is not hiring).
-        careers_page = next((p for p in pages if re.search(r"(careers?|jobs?|openings)", _url_path(p))), None)
-        if careers_page:
+        # Careers page (or a job-board embed) with listings -> 1.0; careers page without listings ->
+        # 0.0; no careers page at all -> None (unavailable; never claim a company is not hiring).
+        careers_idx = next((i for i, p in enumerate(pages) if i > 0 and _CAREERS_PATH.search(_url_path(p))), None)
+        ats_marker = next((m for m in ATS_MARKERS if m in combined_html), None)
+        if careers_idx is not None:
+            careers_page = pages[careers_idx]
             c_body = (careers_page.get("body_text") or "").lower()
             c_md = (careers_page.get("markdown") or "").lower()
             c_text = f"{c_body} {c_md}"
             no_jobs_indicators = ["no current openings", "no open positions", "no job openings", "not currently hiring", "no vacancies", "0 open positions"]
             is_explicitly_not_hiring = any(neg in c_text for neg in no_jobs_indicators)
 
+            job_links = 0
+            if careers_page.get("soup") is not None:
+                job_links = len(careers_page["soup"].find_all("a", href=re.compile(r"/(?:jobs?|positions?|openings?)/[\w-]+", re.I)))
             if is_explicitly_not_hiring:
                 has_openings = False
             else:
-                job_keywords = ["apply now", "open positions", "current openings", "view jobs", "we are hiring", "job description", "open roles"]
-                has_openings = any(kw in c_text for kw in job_keywords) or (
-                    bool(careers_page.get("soup")) and len(careers_page["soup"].find_all("a", href=re.compile(r"/jobs?/"))) > 0
+                job_keywords = ["apply now", "open positions", "current openings", "view jobs", "we are hiring", "we're hiring", "job description", "open roles"]
+                has_openings = (
+                    any(kw in c_text for kw in job_keywords)
+                    or job_links > 0
+                    or any(m in lowered[careers_idx] for m in ATS_MARKERS)
                 )
 
+            evidence = (
+                f"Active hiring detected: open job listings verified at {careers_page['url']}"
+                + (f" ({job_links} job links)" if job_links else "")
+                if has_openings
+                else f"Careers page verified at {careers_page['url']}, but no active job openings found"
+            )
             signals["hiring"] = {
                 "value": 1.0 if has_openings else 0.0,
-                "evidence": f"Active hiring detected: open job listings verified at {careers_page['url']}"
-                if has_openings
-                else f"Careers page verified at {careers_page['url']}, but no active job openings found",
+                "evidence": evidence,
                 "provider": self.name,
                 "source_url": careers_page["url"],
+            }
+        elif ats_marker:
+            signals["hiring"] = {
+                "value": 1.0,
+                "evidence": f"Active hiring detected: job board embed ({ats_marker}) found on site",
+                "provider": self.name,
+                "source_url": home_url,
             }
         else:
             signals["hiring"] = {

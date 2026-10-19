@@ -29,12 +29,13 @@ class QuotaService:
     @classmethod
     async def check_and_reserve_lead_ingestion(
         cls, org_id: uuid.UUID, requested_count: int, db: AsyncSession
-    ) -> None:
+    ) -> int:
         """
         Enforces:
         1. Per-search limit (max 500 leads per search).
-        2. Monthly ingestion ceiling (default 100 leads/month per organization).
-        Fails closed if Redis is unreachable.
+        2. Monthly ingestion ceiling (default 100 leads/month per organization). A search asking for
+           more than what is left runs with what is left; only an exhausted quota is rejected.
+        Returns the number of leads reserved. Fails closed if Redis is unreachable.
         """
         # 1. Enforce per-search limit
         if requested_count > settings.QUOTA_LEADS_PER_SEARCH:
@@ -54,12 +55,13 @@ class QuotaService:
         db_month_used = (await db.execute(stmt)).scalar_one()
 
         monthly_limit = settings.QUOTA_LEADS_PER_MONTH
-        if db_month_used + requested_count > monthly_limit:
-            remaining = max(0, monthly_limit - db_month_used)
+        remaining = monthly_limit - db_month_used
+        if remaining <= 0:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Monthly lead ingestion quota exceeded. Limit: {monthly_limit}, used this month: {db_month_used}, remaining: {remaining}, requested: {requested_count}.",
+                detail=f"Monthly lead ingestion quota exceeded. Limit: {monthly_limit}, used this month: {db_month_used}, remaining: 0. A super admin can raise the quota.",
             )
+        granted = min(requested_count, remaining)
 
         # 3. Concurrency-safe Redis reservation (fail-closed if Redis unavailable)
         try:
@@ -68,7 +70,7 @@ class QuotaService:
             current_reserved = await r.get(key)
             current_val = int(current_reserved) if current_reserved else db_month_used
 
-            if current_val + requested_count > monthly_limit:
+            if current_val + granted > monthly_limit:
                 # Reconcile with active in-flight runs in database to detect stale reservations from finished/failed runs
                 in_flight_stmt = select(func.coalesce(func.sum(Run.items_total), 0)).where(
                     Run.org_id == org_id,
@@ -76,21 +78,20 @@ class QuotaService:
                     Run.created_at >= start_of_month,
                 )
                 in_flight_leads = int((await db.execute(in_flight_stmt)).scalar_one())
-                actual_in_use = db_month_used + in_flight_leads
-
-                if actual_in_use + requested_count <= monthly_limit:
-                    current_val = actual_in_use
-                else:
+                current_val = min(current_val, db_month_used + in_flight_leads)
+                granted = min(granted, monthly_limit - current_val)
+                if granted <= 0:
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=f"Monthly lead ingestion quota exceeded due to concurrent requests. Limit: {monthly_limit}.",
+                        detail=f"Monthly lead ingestion quota exceeded: the rest of this month's {monthly_limit} leads are reserved by searches still running.",
                     )
 
             # Atomically set reservation
             pipe = r.pipeline()
-            pipe.set(key, current_val + requested_count)
+            pipe.set(key, current_val + granted)
             pipe.expire(key, 86400 * 32)
             await pipe.execute()
+            return granted
         except HTTPException:
             raise
         except Exception as e:

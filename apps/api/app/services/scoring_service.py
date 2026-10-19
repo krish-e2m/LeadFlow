@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.constants import PipelineStatus
 from app.models.engine import ScoringEngine, ScoringEngineParam
 from app.models.enrichment import Enrichment
@@ -34,6 +35,7 @@ class ScoringService:
             PipelineStatus.SOURCED,
             PipelineStatus.ENRICHING,
             PipelineStatus.ENRICHED,
+            PipelineStatus.ERROR,
         ]:
             lead.pipeline_status = PipelineStatus.SCORING
             await self.session.flush()
@@ -103,6 +105,7 @@ class ScoringService:
             threshold_medium=engine_param.threshold_medium if engine_param else 50.0,
             threshold_low=engine_param.threshold_low if engine_param else 25.0,
             ideal_client_bonus=engine_param.ideal_client_bonus if engine_param else 0.0,
+            min_signals_for_qualified=settings.SCORING_MIN_SIGNALS_FOR_QUALIFIED,
         )
 
         scoring_output = engine_core.evaluate(enrichment.payload)
@@ -129,13 +132,18 @@ class ScoringService:
         # Pipeline status:
         # Only advance to SCORED if lead was in discovery/enrichment pipeline stages.
         # Rescoring MUST NOT downgrade or alter terminal/post-review states (APPROVED, DISQUALIFIED, DRAFTED, SYNCED).
-        if initial_status in [
+        if initial_status == PipelineStatus.ERROR and scoring_output.overall_score is None:
+            # Still nothing to score: the lead stays in the error stage with its reason.
+            lead.pipeline_status = PipelineStatus.ERROR
+        elif initial_status in [
             PipelineStatus.SOURCED,
             PipelineStatus.ENRICHING,
             PipelineStatus.ENRICHED,
             PipelineStatus.SCORING,
+            PipelineStatus.ERROR,
         ]:
             lead.pipeline_status = PipelineStatus.SCORED
+            lead.error_reason = None
 
         await self.session.flush()
         return score_record

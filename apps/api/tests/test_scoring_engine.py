@@ -56,7 +56,10 @@ def test_missing_data_skipped_never_zeroed():
 
     # Since all available signals are 1.0, normalized score MUST be 100.0, NOT penalized by missing signals
     assert result.overall_score == 100.0
-    assert result.score_band == ScoreBand.QUALIFIED
+    # ...but two data points are too thin to auto-qualify: the lead is held in Review.
+    assert result.score_band == ScoreBand.REVIEW
+    assert result.signal_details["_metadata"]["held_for_review"] is True
+    assert ScoringEngineCore(min_signals_for_qualified=0).evaluate(raw_signals_partial).score_band == ScoreBand.QUALIFIED
     assert result.website_subscore == 100.0
     assert result.marketing_subscore is None  # No marketing signals available
     assert result.available_signals_count == 2
@@ -136,8 +139,10 @@ def test_fired_versus_nonfired_contribution():
 
 def test_canonical_score_bands_enforced():
     """Verify threshold evaluation for canonical score bands: qualified, review, disqualified."""
-    # Qualified: >= 75.0
-    engine_std = ScoringEngineCore(threshold_high=75.0, threshold_medium=50.0, threshold_low=25.0)
+    # Qualified: >= 75.0 (coverage guard off: this test is about thresholds only)
+    engine_std = ScoringEngineCore(
+        threshold_high=75.0, threshold_medium=50.0, threshold_low=25.0, min_signals_for_qualified=0
+    )
     high_signals = {"legacy_platform": {"value": 1.0}, "no_ssl": {"value": 1.0}}
     assert engine_std.evaluate(high_signals).score_band == ScoreBand.QUALIFIED
 
@@ -244,3 +249,69 @@ def test_canonical_scoring_integrity_and_exclusion_of_supplemental_signals():
     assert result.signal_details["slow_site"]["provider"] == "pagespeed"
     assert result.signal_details["slow_site"]["evidence"] == "Lighthouse FCP > 3.0s"
     assert result.signal_details["poor_seo"]["provider"] == "crawler"
+
+
+def test_zero_weight_disables_a_signal_everywhere():
+    """A weight of 0 switches a signal off: not counted, not a pain point, not in the denominator."""
+    weights = {**DEFAULT_SIGNAL_WEIGHTS, "no_ssl": 0.0}
+    signals = {
+        "no_ssl": {"value": 1.0, "evidence": "No HTTPS"},
+        "legacy_platform": {"value": 0.0},
+        "slow_site": {"value": 0.0},
+    }
+    result = ScoringEngineCore(weights=weights).evaluate(signals)
+
+    assert result.overall_score == 0.0
+    assert result.available_signals_ratio == "2/21"
+    meta = result.signal_details["_metadata"]
+    assert meta["disabled_signals_count"] == 1
+    assert meta["fired_signals_count"] == 0
+    assert result.signal_details["no_ssl"]["status"] == "disabled"
+    assert "No HTTPS" not in result.explanation
+
+
+def test_all_signals_disabled_scores_nothing():
+    weights = {key: 0.0 for key in DEFAULT_SIGNAL_WEIGHTS}
+    weights["poor_seo"] = 0.0
+    result = ScoringEngineCore(weights=weights).evaluate({"poor_seo": {"value": 1.0}})
+    assert result.overall_score is None
+    assert result.score_band is None
+
+
+def test_partial_stored_weights_keep_the_full_catalog():
+    """Engines saved with only a few keys (older data) still evaluate all 22 signals."""
+    engine = ScoringEngineCore(weights={"poor_seo": 3.0, "not_a_signal": 9.0})
+    assert len(engine.weights) == 22
+    assert engine.weights["poor_seo"] == 3.0
+    assert engine.weights["legacy_platform"] == DEFAULT_SIGNAL_WEIGHTS["legacy_platform"]
+    assert "not_a_signal" not in engine.weights
+
+
+def test_pain_points_are_ranked_by_impact_not_catalog_order():
+    from app.scoring.engine import ranked_findings
+
+    signals = {
+        "no_live_chat": {"value": 1.0, "evidence": "no chat"},  # weight 0.5, listed early in catalog
+        "poor_seo": {"value": 1.0, "evidence": "no meta"},  # weight 1.4
+        "legacy_platform": {"value": 1.0, "evidence": "Drupal 7"},  # weight 1.5
+    }
+    result = ScoringEngineCore(min_signals_for_qualified=0).evaluate(signals)
+    order = [f["signal"] for f in ranked_findings(result.signal_details)]
+    assert order == ["legacy_platform", "poor_seo", "no_live_chat"]
+    assert result.signal_details["_metadata"]["top_findings"][0] == "legacy_platform"
+    assert result.explanation.index("Drupal 7") < result.explanation.index("no chat")
+
+
+def test_coverage_guard_only_holds_thin_qualified_scores():
+    eleven_detected = {key: {"value": 1.0} for key in list(DEFAULT_SIGNAL_WEIGHTS)[:11]}
+    full = ScoringEngineCore().evaluate(eleven_detected)
+    assert full.score_band == ScoreBand.QUALIFIED
+    assert full.signal_details["_metadata"]["held_for_review"] is False
+
+    thin = ScoringEngineCore().evaluate({"legacy_platform": {"value": 1.0}, "poor_seo": {"value": 1.0}})
+    assert thin.score_band == ScoreBand.REVIEW
+    assert "Held in Review" in thin.explanation
+
+    # The guard never lifts a low score, it only withholds the Qualified label.
+    thin_low = ScoringEngineCore().evaluate({"legacy_platform": {"value": 0.0}, "poor_seo": {"value": 0.0}})
+    assert thin_low.score_band == ScoreBand.DISQUALIFIED

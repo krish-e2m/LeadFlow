@@ -495,7 +495,7 @@ class HunterAdapter(BaseProviderAdapter):
                     {
                         "company_name": clean_d.split(".")[0].capitalize(),
                         "domain": clean_d,
-                        "industry": "Direct Input",
+                        "industry": None,
                         "country": None,
                         "city": None,
                         "employee_count": None,
@@ -512,12 +512,16 @@ class HunterAdapter(BaseProviderAdapter):
             },
         }
 
-    async def enrich_company(self, domain: str) -> Optional[Dict[str, Any]]:
+    async def enrich_company(
+        self, domain: str, allow_domain_search_fallback: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """
         Enriches a company using Hunter's Company Enrichment API (GET /v2/companies/find).
         Extracts verified firmographics, legal name, sector, headcount, location, phone,
         technologies, and social presence.
-        Falls back cleanly to /domain-search if /companies/find is unavailable.
+        Falls back to /domain-search if /companies/find has nothing, unless the caller opts out:
+        Company Enrichment costs ~0.2 credits but a Domain Search costs a full credit, which the
+        automatic search pipeline should not spend just to fill in firmographics.
         """
         if not self.is_configured():
             return None
@@ -537,6 +541,8 @@ class HunterAdapter(BaseProviderAdapter):
                         return self._parse_company_find(data, clean_domain)
 
                 # 2. Fallback: GET /v2/domain-search
+                if not allow_domain_search_fallback:
+                    return None
                 logger.info(
                     f"Hunter /companies/find returned HTTP {resp.status_code} for {clean_domain}; trying /domain-search"
                 )

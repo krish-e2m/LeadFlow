@@ -34,10 +34,16 @@ async def create_search(
     )
     await db.commit()
 
+    message = "Search job accepted and queued for background processing."
+    if run.items_total < req.limit:
+        message = (
+            f"Search queued for {run.items_total} leads instead of {req.limit}: "
+            f"that is what is left of this month's lead quota."
+        )
     return RunAcceptedResponse(
         run_id=run.id,
         status=run.status,
-        message="Search job accepted and queued for background processing.",
+        message=message,
         poll_url=f"/api/v1/runs/{run.id}",
     )
 

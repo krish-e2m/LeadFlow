@@ -1,17 +1,18 @@
 import re
+import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-import urllib.parse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.constants import ApprovalStatus, UserRole
+from app.core.logging import logger
 from app.db.session import AsyncSessionLocal, auth_session, get_db
 from app.models.access_request import AccessRequest
 from app.models.engine import ScoringEngine, ScoringEngineParam
@@ -35,7 +36,6 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     SignupRequest,
 )
-from app.services.google_auth_service import GoogleAuthService
 from app.scoring.catalog import DEFAULT_SIGNAL_WEIGHTS
 from app.security.csrf import set_csrf_cookie
 from app.security.jwt import create_access_token, create_refresh_token, decode_token
@@ -43,6 +43,7 @@ from app.security.passwords import hash_password, verify_password
 from app.security.rbac import AuthenticatedUser, get_current_user
 from app.security.session_store import SessionStore
 from app.services.audit_service import AuditService
+from app.services.google_auth_service import GoogleAuthService
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -809,6 +810,8 @@ async def google_oauth_callback(
         err_param = urllib.parse.quote(str(e.detail))
         return RedirectResponse(url=f"{login_url}?error={err_param}", status_code=status.HTTP_302_FOUND)
     except Exception as exc:
+        # The user only sees a generic message; keep the cause in the server log.
+        logger.exception(f"Google OAuth callback failed: {type(exc).__name__}")
         err_param = urllib.parse.quote("An unexpected error occurred during Google authentication.")
         return RedirectResponse(url=f"{login_url}?error={err_param}", status_code=status.HTTP_302_FOUND)
 

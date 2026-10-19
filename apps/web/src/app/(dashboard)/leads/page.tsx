@@ -39,7 +39,16 @@ import { Tooltip } from "@/components/Tooltip";
 import { apiClient } from "@/lib/api-client";
 import { announceApproval } from "@/lib/autoDraft";
 import { useAuth } from "@/lib/auth-context";
-import { cn, formatDate, formatNumber, formatRelative, getBandTone, type Tone } from "@/lib/utils";
+import {
+  cn,
+  describeBandChanges,
+  formatDate,
+  formatNumber,
+  formatRelative,
+  getBandTone,
+  type BandChanges,
+  type Tone,
+} from "@/lib/utils";
 
 const PAGE_SIZE = 100;
 const CHECKBOX_COL_WIDTH = "44px";
@@ -49,27 +58,41 @@ const VIEW_TABS = [
   { value: "pending", label: "Needs review" },
   { value: "approved", label: "Approved" },
   { value: "rejected", label: "Rejected" },
+  { value: "archived", label: "Archived" },
 ];
 
 const BAND_OPTIONS = [
   { value: "all", label: "All bands" },
-  { value: "qualified", label: "Qualified (75+)" },
-  { value: "review", label: "Review (50–74)" },
-  { value: "disqualified", label: "Disqualified (<50)" },
+  { value: "qualified", label: "Qualified" },
+  { value: "review", label: "Review" },
+  { value: "disqualified", label: "Disqualified" },
+];
+
+const SORT_OPTIONS = [
+  { value: "score", label: "Highest score" },
+  { value: "newest", label: "Newest" },
 ];
 
 const approvalTone: Record<ApprovalStatus, Tone> = { approved: "success", rejected: "danger", pending: "warning" };
 
-const SKELETON_COLUMNS = ["w-4", "w-48", "w-32", "w-20", "w-20", "w-20", "w-16", "w-12"];
+const SKELETON_COLUMNS = ["w-4", "w-48", "w-32", "w-10", "w-20", "w-20", "w-20", "w-16", "w-12"];
 
-type BulkAction = "approve" | "reject" | "rescore" | "archive";
+type BulkAction = "approve" | "reject" | "rescore" | "archive" | "unarchive";
 
 const bulkVerb: Record<BulkAction, string> = {
   approve: "approved",
   reject: "rejected",
   rescore: "re-scored",
   archive: "archived",
+  unarchive: "restored",
 };
+
+interface BulkResult {
+  total_succeeded: number;
+  total_failed: number;
+  drafts_queued?: number;
+  band_changes?: BandChanges | null;
+}
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
@@ -92,6 +115,7 @@ function LeadsPipeline() {
   const [query, setQuery] = useState(initialQuery);
   const [view, setView] = useState("all");
   const [band, setBand] = useState("all");
+  const [sort, setSort] = useState("score");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [compact, setCompact] = useState(false);
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
@@ -115,10 +139,13 @@ function LeadsPipeline() {
     return () => window.clearTimeout(timer);
   }, [searchInput]);
 
+  const isArchivedView = !isClientViewer && view === "archived";
+
   const filterParams = useCallback(() => {
     const params = new URLSearchParams();
     if (band !== "all") params.append("score_band", band);
-    if (!isClientViewer && view !== "all") params.append("approval_status", view);
+    if (!isClientViewer && view === "archived") params.append("archived", "true");
+    else if (!isClientViewer && view !== "all") params.append("approval_status", view);
     if (query) params.append("search", query);
     return params;
   }, [band, view, query, isClientViewer]);
@@ -133,6 +160,7 @@ function LeadsPipeline() {
       try {
         const params = filterParams();
         params.append("limit", String(PAGE_SIZE));
+        params.append("sort", sort);
         setLeads(await apiClient.get<Lead[]>(`/leads?${params.toString()}`));
       } catch (err: unknown) {
         setError(errorMessage(err, "The leads request failed. Check your connection and try again."));
@@ -141,7 +169,7 @@ function LeadsPipeline() {
         setIsLoading(false);
       }
     },
-    [filterParams]
+    [filterParams, sort]
   );
 
   useEffect(() => {
@@ -183,6 +211,8 @@ function LeadsPipeline() {
     setIsExporting(true);
     try {
       const params = filterParams();
+      params.delete("archived");
+      if (isArchivedView) params.append("include_archived", "true");
       params.append("format", format);
       await apiClient.downloadFile(`/leads/export?${params.toString()}`, `leads_export.${format}`);
       toast.success(`Export ready`, `${format.toUpperCase()} file downloaded.`);
@@ -197,7 +227,7 @@ function LeadsPipeline() {
     if (selectedIds.length === 0) return;
     setIsBulkRunning(true);
     try {
-      const res = await apiClient.post<{ total_succeeded: number; total_failed: number; drafts_queued?: number }>("/leads/bulk", {
+      const res = await apiClient.post<BulkResult>("/leads/bulk", {
         action,
         lead_ids: selectedIds,
       });
@@ -209,7 +239,11 @@ function LeadsPipeline() {
       } else {
         toast.success(
           `${res.total_succeeded} lead${res.total_succeeded === 1 ? "" : "s"} ${bulkVerb[action]}`,
-          res.drafts_queued ? `Writing ${res.drafts_queued} email draft${res.drafts_queued === 1 ? "" : "s"}. They appear in Drafts shortly.` : undefined
+          action === "rescore"
+            ? describeBandChanges(res.band_changes)
+            : res.drafts_queued
+              ? `Writing ${res.drafts_queued} email draft${res.drafts_queued === 1 ? "" : "s"}. They appear in Drafts shortly.`
+              : undefined
         );
       }
       setSelectedIds([]);
@@ -239,7 +273,7 @@ function LeadsPipeline() {
 
   const companyLeft = isClientViewer ? "0px" : CHECKBOX_COL_WIDTH;
   const skeletonColumns = useMemo(
-    () => (isClientViewer ? SKELETON_COLUMNS.slice(1, 7) : SKELETON_COLUMNS),
+    () => (isClientViewer ? SKELETON_COLUMNS.slice(1, 8) : SKELETON_COLUMNS),
     [isClientViewer]
   );
 
@@ -319,6 +353,10 @@ function LeadsPipeline() {
                 <label className="block text-caption font-medium text-fg">Score band</label>
                 <Select value={band} onValueChange={setBand} options={BAND_OPTIONS} aria-label="Score band" />
               </div>
+              <div className="space-y-1.5">
+                <label className="block text-caption font-medium text-fg">Sort by</label>
+                <Select value={sort} onValueChange={setSort} options={SORT_OPTIONS} aria-label="Sort leads" />
+              </div>
               {hasActiveFilters && (
                 <Button variant="ghost" size="sm" className="w-full" onClick={clearFilters}>
                   Clear all filters
@@ -380,7 +418,9 @@ function LeadsPipeline() {
       {error ? (
         <ErrorState title="Couldn't load leads" message={error} onRetry={() => void fetchLeads()} />
       ) : !isLoading && leads.length === 0 ? (
-        hasActiveFilters ? (
+        isArchivedView && !query && band === "all" ? (
+          <EmptyState title="No archived leads" description="Leads you archive appear here and can be restored." />
+        ) : hasActiveFilters ? (
           <EmptyState
             title="No leads match these filters"
             description="Try a different search or clear the filters."
@@ -444,6 +484,7 @@ function LeadsPipeline() {
                   )}
                   <Th stickyLeft={companyLeft} className="min-w-[260px]">Company</Th>
                   <Th>Industry and location</Th>
+                  <Th className="text-right">Score</Th>
                   <Th>Score band</Th>
                   <Th>Stage</Th>
                   <Th>Approval</Th>
@@ -518,11 +559,22 @@ function LeadsPipeline() {
                             </div>
                           </Tooltip>
                         </Td>
+                        <Td compact={compact} className="text-right">
+                          <span className="text-sm font-medium tabular-nums text-fg">
+                            {typeof lead.overall_score === "number" ? Math.round(lead.overall_score) : "—"}
+                          </span>
+                        </Td>
                         <Td compact={compact}>
                           <StatusBadge tone={getBandTone(lead.score_band)}>{lead.score_band ?? "Not scored"}</StatusBadge>
                         </Td>
                         <Td compact={compact}>
-                          <span className="whitespace-nowrap text-caption capitalize text-fg-secondary">{lead.pipeline_status}</span>
+                          {lead.pipeline_status === "error" ? (
+                            <Tooltip content={lead.error_reason || "This website couldn't be audited."}>
+                              <span className="whitespace-nowrap text-caption font-medium text-danger">Error</span>
+                            </Tooltip>
+                          ) : (
+                            <span className="whitespace-nowrap text-caption capitalize text-fg-secondary">{lead.pipeline_status}</span>
+                          )}
                         </Td>
                         <Td compact={compact}>
                           <StatusBadge tone={approvalTone[lead.approval_status]}>{lead.approval_status}</StatusBadge>
@@ -534,7 +586,7 @@ function LeadsPipeline() {
                         </Td>
                         {!isClientViewer && (
                           <Td compact={compact} className="w-36">
-                            {lead.approval_status === "approved" && (
+                            {!isArchivedView && lead.approval_status === "approved" && (
                               <div className="flex justify-end">
                                 <Button
                                   size="sm"
@@ -547,19 +599,21 @@ function LeadsPipeline() {
                                 </Button>
                               </div>
                             )}
-                            {lead.approval_status === "pending" && (
+                            {!isArchivedView && lead.approval_status === "pending" && (
                               <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-fast focus-within:opacity-100 group-hover:opacity-100">
                                 <Tooltip
                                   content={
-                                    lead.score_band === "disqualified"
-                                      ? "Disqualified: open the lead to approve with a reason"
-                                      : "Approve"
+                                    lead.pipeline_status === "error"
+                                      ? "Not audited: open the lead to approve with a reason"
+                                      : lead.score_band === "disqualified"
+                                        ? "Disqualified: open the lead to approve with a reason"
+                                        : "Approve"
                                   }
                                 >
                                   <span>
                                     <button
                                       type="button"
-                                      disabled={lead.score_band === "disqualified"}
+                                      disabled={lead.score_band === "disqualified" || lead.pipeline_status === "error"}
                                       onClick={() => void handleQuickApproval(lead, "approved")}
                                       aria-label={`Approve ${lead.company_name}`}
                                       className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-control text-fg-secondary transition-colors duration-fast hover:bg-success-subtle hover:text-success disabled:pointer-events-none disabled:opacity-40"
@@ -612,18 +666,26 @@ function LeadsPipeline() {
             >
               <span className="px-1 text-sm font-medium text-fg">{selectedIds.length} selected</span>
               <span className="h-5 w-px bg-border" aria-hidden="true" />
-              <Button size="sm" disabled={isBulkRunning} onClick={() => void handleBulkAction("approve")}>
-                Approve
-              </Button>
-              <Button size="sm" variant="secondary" disabled={isBulkRunning} onClick={() => void handleBulkAction("reject")}>
-                Reject
-              </Button>
-              <Button size="sm" variant="ghost" disabled={isBulkRunning} onClick={() => void handleBulkAction("rescore")}>
-                Re-score
-              </Button>
-              <Button size="sm" variant="ghost" disabled={isBulkRunning} onClick={() => void handleBulkAction("archive")}>
-                Archive
-              </Button>
+              {isArchivedView ? (
+                <Button size="sm" disabled={isBulkRunning} onClick={() => void handleBulkAction("unarchive")}>
+                  Restore
+                </Button>
+              ) : (
+                <>
+                  <Button size="sm" disabled={isBulkRunning} onClick={() => void handleBulkAction("approve")}>
+                    Approve
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={isBulkRunning} onClick={() => void handleBulkAction("reject")}>
+                    Reject
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={isBulkRunning} onClick={() => void handleBulkAction("rescore")}>
+                    Re-score
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={isBulkRunning} onClick={() => void handleBulkAction("archive")}>
+                    Archive
+                  </Button>
+                </>
+              )}
               <Tooltip content="Clear selection">
                 <button
                   type="button"

@@ -17,6 +17,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# The Python build pattern above must not swallow the Next.js source folder.
+!apps/web/src/lib/
 lib64/
 parts/
 sdist/

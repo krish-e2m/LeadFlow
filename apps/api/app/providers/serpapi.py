@@ -1,5 +1,7 @@
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -8,6 +10,57 @@ from app.core.logging import logger
 from app.providers.base import BaseProviderAdapter, ProviderStatus
 
 DEFAULT_SERPAPI_BASE_URL = "https://serpapi.com"
+
+_NAME_STOPWORDS = {"inc", "llc", "ltd", "the", "co", "corp", "company", "group", "and", "of", "pvt", "limited", "gmbh"}
+
+
+def _host(url_or_domain: str) -> str:
+    text = (url_or_domain or "").strip().lower()
+    if "://" not in text:
+        text = f"http://{text}"
+    host = urlparse(text).hostname or ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _same_site(website: str, domain: str) -> bool:
+    a, b = _host(website), _host(domain)
+    return bool(a and b) and (a == b or a.endswith(f".{b}") or b.endswith(f".{a}"))
+
+
+def _name_matches(title: str, company: str) -> bool:
+    tokens = [t for t in re.findall(r"[a-z0-9]+", (company or "").lower()) if len(t) >= 3 and t not in _NAME_STOPWORDS]
+    title_l = (title or "").lower()
+    return bool(tokens) and any(t in title_l for t in tokens)
+
+
+def pick_matching_place(data: Dict[str, Any], domain: str, company: str) -> Optional[Dict[str, Any]]:
+    """
+    The Maps result that is really this company. A listing whose website points elsewhere is a
+    different business and its rating must not be attributed to the lead; a listing without a
+    website is accepted only when its name matches the company.
+    """
+    candidates = []
+    if isinstance(data.get("place_results"), dict):
+        candidates.append(data["place_results"])
+    candidates.extend(p for p in (data.get("local_results") or []) if isinstance(p, dict))
+
+    for place in candidates:
+        if place.get("website") and _same_site(place["website"], domain):
+            return place
+    for place in candidates:
+        if not place.get("website") and _name_matches(place.get("title", ""), company):
+            return place
+    return None
+
+
+def parse_review_count(raw: Any) -> int:
+    """Review counts arrive as ints or display strings such as "1,234"."""
+    if raw is None:
+        return 0
+    try:
+        return int(str(raw).replace(",", "").strip() or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 class SerpApiAdapter(BaseProviderAdapter):
@@ -149,17 +202,14 @@ class SerpApiAdapter(BaseProviderAdapter):
                 data = res.json()
 
                 # SerpApi Google Maps returns either `place_results` (direct match) or `local_results` (list)
-                place = data.get("place_results")
-                if not place:
-                    local_list = data.get("local_results", [])
-                    place = local_list[0] if local_list else None
+                place = pick_matching_place(data, domain, clean_term)
 
                 if not place:
                     return {
                         "signals": {
                             "low_review_rating": {
                                 "value": None,
-                                "evidence": f"No Google Maps business profile found via SerpApi for '{clean_term}'",
+                                "evidence": f"No Google Maps business profile matching {domain} found via SerpApi for '{clean_term}'",
                                 "provider": self.name,
                             }
                         },
@@ -167,12 +217,7 @@ class SerpApiAdapter(BaseProviderAdapter):
                     }
 
                 rating = place.get("rating")
-                # reviews may be an int or a formatted string
-                raw_reviews = place.get("reviews", 0)
-                try:
-                    review_count = int(raw_reviews) if raw_reviews is not None else 0
-                except (ValueError, TypeError):
-                    review_count = 0
+                review_count = parse_review_count(place.get("reviews"))
 
                 title = place.get("title", clean_term)
                 address = place.get("address")

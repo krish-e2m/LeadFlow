@@ -96,8 +96,9 @@ class SearchService:
                 detail="Search must contain at least one criteria (e.g., domains, locations, employee_ranges, or a valid audience).",
             )
 
-        # 3. Check and reserve lead ingestion quotas (per-search & monthly)
-        await QuotaService.check_and_reserve_lead_ingestion(org_id, limit, self.session)
+        # 3. Check and reserve lead ingestion quotas (per-search & monthly). The search may be
+        # trimmed to what is left of this month's allotment.
+        limit = await QuotaService.check_and_reserve_lead_ingestion(org_id, limit, self.session)
 
         # 4. Check and reserve concurrent run quota
         await QuotaService.check_and_reserve_concurrent_run(org_id, self.session)

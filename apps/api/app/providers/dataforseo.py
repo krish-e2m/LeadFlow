@@ -139,12 +139,21 @@ class DataForSEOAdapter(BaseProviderAdapter):
                         "provenance": {"status": "no_data"},
                     }
 
-                result = tasks[0]["result"][0]
-                organic_keywords = result.get("metrics", {}).get("organic", {}).get("count", 0)
-                paid_keywords = result.get("metrics", {}).get("paid", {}).get("count", 0)
+                result = tasks[0]["result"][0] or {}
+                # Labs overview endpoints nest the numbers under items[].metrics; accept both shapes.
+                items = result.get("items") if isinstance(result.get("items"), list) else []
+                metrics = result.get("metrics") or (
+                    items[0].get("metrics") if items and isinstance(items[0], dict) else None
+                ) or {}
+                organic = metrics.get("organic") or {}
+                paid = metrics.get("paid") or {}
+                organic_keywords = organic.get("count") or 0
+                paid_keywords = paid.get("count") or 0
+                paid_cost = paid.get("estimated_paid_traffic_cost")
 
                 is_poor_seo = organic_keywords < 50
-                has_ppc = paid_keywords > 0
+                # Handbook rule: >$1k/month estimated paid traffic cost is a real buying signal.
+                has_ppc = paid_cost > 1000 if isinstance(paid_cost, (int, float)) else paid_keywords > 0
 
                 return {
                     "signals": {
@@ -160,7 +169,11 @@ class DataForSEOAdapter(BaseProviderAdapter):
                         },
                         "ppc_spend": {
                             "value": 1.0 if has_ppc else 0.0,
-                            "evidence": f"Active paid PPC keywords: {paid_keywords}",
+                            "evidence": (
+                                f"Estimated paid search spend ~${paid_cost:,.0f}/month ({paid_keywords} paid keywords)"
+                                if isinstance(paid_cost, (int, float))
+                                else f"Active paid PPC keywords: {paid_keywords}"
+                            ),
                             "provider": self.name,
                         },
                     },

@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     ARQ_JOB_TIMEOUT: int = 1800
     DEFAULT_SEARCH_LEAD_LIMIT: int = 100
     MAX_SEARCH_LEAD_LIMIT: int = 500
+    # Leads enriched in parallel inside one search run. Each lead already fans out to its own
+    # collectors, so keep this modest to stay under provider rate limits.
+    SEARCH_LEAD_CONCURRENCY: int = 4
+    # A Qualified-level score built on fewer available signals than this is held in Review.
+    SCORING_MIN_SIGNALS_FOR_QUALIFIED: int = 6
 
     # Quotas & Limits (Per-Org Defaults)
     QUOTA_LEADS_PER_MONTH: int = 100

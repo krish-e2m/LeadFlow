@@ -219,13 +219,15 @@ async def test_collector_failure_isolation(admin_engine):
 
 
 @pytest.mark.asyncio
-async def test_rescoring_preserves_pipeline_status_and_history(admin_engine):
+async def test_rescoring_preserves_pipeline_status_and_history(admin_engine, monkeypatch):
     """
     Verify rule:
     1. Rescoring creates a new Score record (snapshot).
     2. Rescoring does not re-enrich or alter original evidence.
     3. Rescoring does not reset an approved or disqualified lead to SCORED.
     """
+    # Two-signal fixture: switch the thin-evidence guard off, this test is about status history.
+    monkeypatch.setattr(settings, "SCORING_MIN_SIGNALS_FOR_QUALIFIED", 0)
     admin_session_maker = async_sessionmaker(bind=admin_engine, class_=AsyncSession, expire_on_commit=False)
     org_id = uuid.uuid4()
     org_slug = f"rescore-org-{org_id.hex[:6]}"

@@ -67,6 +67,8 @@ class Lead(Base, UUIDPrimaryKeyMixin, OrgScopedMixin, TimestampMixin, SoftDelete
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Why the lead is in the "error" stage (unreachable site, collector failure); cleared on success.
+    error_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # Relationships
     organization: Mapped["Organization"] = relationship("Organization", back_populates="leads")

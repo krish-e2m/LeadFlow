@@ -1,8 +1,79 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from app.core.constants import ScoreBand, SignalCategory
 from app.scoring.catalog import DEFAULT_SIGNAL_WEIGHTS, SIGNAL_CATEGORIES, SIGNAL_LABELS
+
+# A prospect whose score clears the Qualified threshold on fewer signals than this is held in
+# Review: a near-perfect score built from two or three data points is not evidence enough.
+DEFAULT_MIN_SIGNALS_FOR_QUALIFIED = 6
+DETECTED_THRESHOLD = 0.5
+
+
+def normalize_weights(weights: Optional[Mapping[str, Any]]) -> Dict[str, float]:
+    """
+    Maps any stored weights onto exactly the canonical 22 signals. Missing or unparseable entries
+    fall back to the catalog default and unknown keys are ignored, so an engine saved before
+    validation existed can never shrink or pad the signal catalog.
+    """
+    normalized: Dict[str, float] = {}
+    source = weights or {}
+    for key, default in DEFAULT_SIGNAL_WEIGHTS.items():
+        try:
+            value = float(source.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        if value != value or value < 0:  # NaN or negative
+            value = default
+        normalized[key] = value
+    return normalized
+
+
+def _coerce_value(raw: Any) -> Optional[float]:
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value:
+        return None
+    return min(1.0, max(0.0, value))
+
+
+def _coerce_value_weight(raw: Any) -> float:
+    try:
+        weight = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return weight if weight == weight and weight > 0 else 0.0
+
+
+def ranked_findings(signal_details: Mapping[str, Any], limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Detected, enabled signals ordered by how much they move the score (weight x value), so the
+    explanation and the outreach draft lead with the strongest pain points rather than catalog order.
+    Works on stored Score.signal_details, including rows written before signals could be disabled.
+    """
+    findings = []
+    for key, item in signal_details.items():
+        if key.startswith("_") or not isinstance(item, dict):
+            continue
+        value = _coerce_value(item.get("value"))
+        weight = _coerce_value_weight(item.get("weight"))
+        if value is None or value < DETECTED_THRESHOLD or weight <= 0 or item.get("enabled") is False:
+            continue
+        findings.append(
+            {
+                "signal": key,
+                "label": item.get("label") or SIGNAL_LABELS.get(key, key),
+                "finding": item.get("evidence"),
+                "weight": weight,
+                "impact": round(weight * value, 3),
+            }
+        )
+    findings.sort(key=lambda f: (f["impact"], f["weight"]), reverse=True)
+    return findings[:limit] if limit else findings
 
 
 @dataclass
@@ -11,12 +82,16 @@ class SignalEvaluationResult:
     label: str
     category: SignalCategory
     weight: float
-    value: Optional[float]  # 0.0 (not detected), 1.0 (detected), or None (unavailable)
-    status: str  # "detected", "not_detected", or "unavailable"
+    value: Optional[float]  # 0.0 (not detected) .. 1.0 (detected), or None (unavailable)
+    status: str  # "detected", "not_detected", "unavailable" or "disabled"
     evidence: Optional[str]
     provider: Optional[str]
     is_available: bool
     source_url: Optional[str] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.weight > 0
 
 
 @dataclass
@@ -31,185 +106,93 @@ class ScoringResult:
     explanation: str
 
 
+def _weighted_pct(signals: List[SignalEvaluationResult]) -> Optional[float]:
+    total_weight = sum(s.weight for s in signals)
+    if total_weight <= 0:
+        return None
+    return round(sum(s.weight * (s.value or 0.0) for s in signals) / total_weight * 100.0, 1)
+
+
 class ScoringEngineCore:
     """
-    Canonical 22-Signal Scoring Engine implementation.
-    Evaluates prospect enrichment payloads against configurable weights.
-    Strictly excludes unavailable (None) signals from the scoring denominator.
-    Canonical score bands: 'qualified', 'review', 'disqualified', or null for unscored.
+    Canonical 22-signal scoring engine.
+    - Weighted mean over enabled signals that have data; unavailable signals are skipped, never
+      scored as zero. A weight of 0 disables a signal: it is shown but never counted.
+    - Ideal-client bonus only when BOTH the website and marketing groups score strongly.
+    - Bands: qualified >= threshold_high, review >= threshold_medium, else disqualified; null when
+      nothing could be scored.
     """
 
     def __init__(
         self,
-        weights: Optional[Dict[str, float]] = None,
+        weights: Optional[Mapping[str, Any]] = None,
         threshold_high: float = 75.0,
         threshold_medium: float = 50.0,
         threshold_low: float = 25.0,
         ideal_client_bonus: float = 0.0,
         ideal_client_group_threshold: float = 50.0,
+        min_signals_for_qualified: int = DEFAULT_MIN_SIGNALS_FOR_QUALIFIED,
     ):
-        self.weights = weights or dict(DEFAULT_SIGNAL_WEIGHTS)
+        self.weights = normalize_weights(weights)
         self.threshold_high = threshold_high
         self.threshold_medium = threshold_medium
         self.threshold_low = threshold_low
-        self.ideal_client_bonus = max(0.0, ideal_client_bonus)
+        self.ideal_client_bonus = max(0.0, ideal_client_bonus or 0.0)
         self.ideal_client_group_threshold = ideal_client_group_threshold
+        self.min_signals_for_qualified = max(0, int(min_signals_for_qualified or 0))
 
-    def evaluate(self, raw_signals: Dict[str, Any]) -> ScoringResult:
+    def _evaluate_signal(self, key: str, weight: float, raw_item: Any) -> SignalEvaluationResult:
+        evidence = provider = source_url = None
+        if isinstance(raw_item, dict):
+            value = _coerce_value(raw_item.get("value"))
+            evidence = raw_item.get("evidence")
+            provider = raw_item.get("provider")
+            source_url = raw_item.get("source_url")
+        else:
+            value = _coerce_value(raw_item)
+
+        is_available = value is not None
+        if weight <= 0:
+            status = "disabled"
+        elif not is_available:
+            status = "unavailable"
+        elif value >= DETECTED_THRESHOLD:
+            status = "detected"
+        else:
+            status = "not_detected"
+
+        return SignalEvaluationResult(
+            key=key,
+            label=SIGNAL_LABELS.get(key, key),
+            category=SIGNAL_CATEGORIES.get(key, SignalCategory.WEBSITE),
+            weight=weight,
+            value=value,
+            status=status,
+            evidence=evidence,
+            provider=provider,
+            is_available=is_available,
+            source_url=source_url,
+        )
+
+    def evaluate(self, raw_signals: Mapping[str, Any]) -> ScoringResult:
         """
-        Calculates normalized scoring results over raw signal inputs.
-
-        Args:
-            raw_signals: Dictionary where keys are signal keys and values are either:
-                         - dict: {"value": float|None, "evidence": str, "provider": str, "source_url": str}
-                         - float: 0.0 to 1.0 (or None)
+        raw_signals maps signal keys to {"value", "evidence", "provider", "source_url"} dicts or bare
+        0.0-1.0 numbers. Keys outside the catalog are ignored.
         """
-        evaluated_signals: List[SignalEvaluationResult] = []
+        evaluated = [self._evaluate_signal(k, w, raw_signals.get(k)) for k, w in self.weights.items()]
 
-        for key, weight in self.weights.items():
-            category = SIGNAL_CATEGORIES.get(key, SignalCategory.WEBSITE)
-            label = SIGNAL_LABELS.get(key, key)
-
-            raw_item = raw_signals.get(key)
-            val: Optional[float] = None
-            evidence: Optional[str] = None
-            provider: Optional[str] = None
-            source_url: Optional[str] = None
-
-            if isinstance(raw_item, dict):
-                val = raw_item.get("value")
-                evidence = raw_item.get("evidence")
-                provider = raw_item.get("provider")
-                source_url = raw_item.get("source_url")
-            elif isinstance(raw_item, (int, float)):
-                val = float(raw_item)
-            elif raw_item is None:
-                val = None
-
-            is_available = val is not None
-
-            # Determine explicit detection status
-            if not is_available:
-                status = "unavailable"
-            elif val >= 0.5:
-                status = "detected"
-            else:
-                status = "not_detected"
-
-            evaluated_signals.append(
-                SignalEvaluationResult(
-                    key=key,
-                    label=label,
-                    category=category,
-                    weight=weight,
-                    value=val,
-                    status=status,
-                    evidence=evidence,
-                    provider=provider,
-                    is_available=is_available,
-                    source_url=source_url,
-                )
-            )
-
-        # Separate into categories
-        website_avail = [
-            s for s in evaluated_signals if s.category == SignalCategory.WEBSITE and s.is_available
-        ]
-        marketing_avail = [
-            s
-            for s in evaluated_signals
-            if s.category == SignalCategory.MARKETING and s.is_available
-        ]
-        all_avail = [s for s in evaluated_signals if s.is_available]
-
-        total_signals = len(self.weights)
-        available_count = len(all_avail)
+        enabled = [s for s in evaluated if s.enabled]
+        scorable = [s for s in enabled if s.is_available]
+        total_signals = len(enabled)
+        available_count = len(scorable)
         available_ratio = f"{available_count}/{total_signals}"
 
-        # If no signals are available, score must be null (do not assign 0.0)
-        if not all_avail:
-            details_map: Dict[str, Any] = {}
-            for s in evaluated_signals:
-                details_map[s.key] = {
-                    "label": s.label,
-                    "category": s.category.value,
-                    "weight": s.weight,
-                    "value": None,
-                    "status": "unavailable",
-                    "evidence": s.evidence or "Signal data unavailable or collector unconfigured",
-                    "provider": s.provider,
-                    "is_available": False,
-                    "source_url": s.source_url,
-                }
-            details_map["_metadata"] = {
-                "available_signals_count": 0,
-                "available_signals_ratio": f"0/{total_signals}",
-                "total_signals": total_signals,
-                "fired_signals_count": 0,
-            }
-
-            return ScoringResult(
-                overall_score=None,
-                score_band=None,
-                website_subscore=None,
-                marketing_subscore=None,
-                available_signals_count=0,
-                available_signals_ratio=f"0/{total_signals}",
-                signal_details=details_map,
-                explanation="Prospect has not been enriched yet; no audit signals available for scoring.",
-            )
-
-        # Calculate Website Subscore
-        website_subscore: Optional[float] = None
-        if website_avail:
-            w_sum = sum(s.weight * (s.value or 0.0) for s in website_avail)
-            w_total = sum(s.weight for s in website_avail)
-            website_subscore = round((w_sum / w_total) * 100.0, 1) if w_total > 0 else 0.0
-
-        # Calculate Marketing Subscore
-        marketing_subscore: Optional[float] = None
-        if marketing_avail:
-            m_sum = sum(s.weight * (s.value or 0.0) for s in marketing_avail)
-            m_total = sum(s.weight for s in marketing_avail)
-            marketing_subscore = round((m_sum / m_total) * 100.0, 1) if m_total > 0 else 0.0
-
-        # Calculate Normalized Overall Score
-        total_weighted_sum = sum(s.weight * (s.value or 0.0) for s in all_avail)
-        total_weight = sum(s.weight for s in all_avail)
-        base_score = round((total_weighted_sum / total_weight) * 100.0, 1) if total_weight > 0 else 0.0
-
-        # Ideal client = BOTH the website and marketing groups score strongly. The configured
-        # bonus is applied only in that case (a prospect who needs just one of the two services
-        # is not the "new website AND marketing" client the engine is built to surface).
-        ideal_client = (
-            website_subscore is not None
-            and marketing_subscore is not None
-            and website_subscore >= self.ideal_client_group_threshold
-            and marketing_subscore >= self.ideal_client_group_threshold
-        )
-        bonus_applied = self.ideal_client_bonus if (ideal_client and self.ideal_client_bonus > 0.0) else 0.0
-        overall_score = round(min(100.0, max(0.0, base_score + bonus_applied)), 1)
-
-        # Determine Canonical Score Band:
-        # qualified: >= threshold_high (default 75.0)
-        # review: >= threshold_medium (default 50.0)
-        # disqualified: < threshold_medium
-        if overall_score >= self.threshold_high:
-            score_band = ScoreBand.QUALIFIED
-        elif overall_score >= self.threshold_medium:
-            score_band = ScoreBand.REVIEW
-        else:
-            score_band = ScoreBand.DISQUALIFIED
-
-        # Build signal details payload
-        details_map = {}
-        top_opportunities: List[str] = []
-
-        for s in evaluated_signals:
-            details_map[s.key] = {
+        details_map: Dict[str, Any] = {
+            s.key: {
                 "label": s.label,
                 "category": s.category.value,
                 "weight": s.weight,
+                "enabled": s.enabled,
                 "value": s.value,
                 "status": s.status,
                 "evidence": s.evidence,
@@ -217,32 +200,95 @@ class ScoringEngineCore:
                 "is_available": s.is_available,
                 "source_url": s.source_url,
             }
-            if s.is_available and s.value is not None and s.value >= 0.7:
-                desc = s.evidence if s.evidence else f"High signal on {s.label}"
-                top_opportunities.append(f"- {s.label}: {desc}")
-
-        fired_count = len([s for s in all_avail if s.value is not None and s.value >= 0.5])
-        details_map["_metadata"] = {
+            for s in evaluated
+        }
+        metadata: Dict[str, Any] = {
             "available_signals_count": available_count,
             "available_signals_ratio": available_ratio,
             "total_signals": total_signals,
-            "fired_signals_count": fired_count,
+            "catalog_signals": len(evaluated),
+            "disabled_signals_count": len(evaluated) - total_signals,
+            "fired_signals_count": sum(1 for s in scorable if (s.value or 0.0) >= DETECTED_THRESHOLD),
             "ideal_client_bonus": self.ideal_client_bonus,
-            "ideal_client": ideal_client,
-            "ideal_client_bonus_applied": bonus_applied,
         }
 
-        # Construct explanation
+        if not scorable:
+            for s in evaluated:
+                if s.status == "unavailable" and not s.evidence:
+                    details_map[s.key]["evidence"] = "Signal data unavailable or collector unconfigured"
+            metadata.update({"ideal_client": False, "ideal_client_bonus_applied": 0.0, "low_coverage": False})
+            details_map["_metadata"] = metadata
+            reason = (
+                "Every signal is disabled in this engine, so nothing can be scored."
+                if not enabled
+                else "No audit signals available: none could be collected for this prospect, so it was not scored."
+            )
+            return ScoringResult(
+                overall_score=None,
+                score_band=None,
+                website_subscore=None,
+                marketing_subscore=None,
+                available_signals_count=0,
+                available_signals_ratio=available_ratio,
+                signal_details=details_map,
+                explanation=reason,
+            )
+
+        website_subscore = _weighted_pct([s for s in scorable if s.category == SignalCategory.WEBSITE])
+        marketing_subscore = _weighted_pct([s for s in scorable if s.category == SignalCategory.MARKETING])
+        base_score = _weighted_pct(scorable) or 0.0
+
+        # Ideal client = BOTH groups score strongly: the "new website AND marketing" client.
+        ideal_client = (
+            website_subscore is not None
+            and marketing_subscore is not None
+            and website_subscore >= self.ideal_client_group_threshold
+            and marketing_subscore >= self.ideal_client_group_threshold
+        )
+        bonus_applied = self.ideal_client_bonus if ideal_client else 0.0
+        overall_score = round(min(100.0, max(0.0, base_score + bonus_applied)), 1)
+
+        if overall_score >= self.threshold_high:
+            score_band = ScoreBand.QUALIFIED
+        elif overall_score >= self.threshold_medium:
+            score_band = ScoreBand.REVIEW
+        else:
+            score_band = ScoreBand.DISQUALIFIED
+
+        low_coverage = available_count < min(self.min_signals_for_qualified, total_signals)
+        held_for_review = score_band == ScoreBand.QUALIFIED and low_coverage
+        if held_for_review:
+            score_band = ScoreBand.REVIEW
+
+        top = ranked_findings(details_map, limit=5)
+        metadata.update(
+            {
+                "ideal_client": ideal_client,
+                "ideal_client_bonus_applied": bonus_applied,
+                "low_coverage": low_coverage,
+                "held_for_review": held_for_review,
+                "top_findings": [f["signal"] for f in top],
+            }
+        )
+        details_map["_metadata"] = metadata
+
         opp_text = (
-            "\n".join(top_opportunities[:5])
-            if top_opportunities
-            else "Standard baseline score across verified signals."
+            "\n".join(f"- {f['label']}: {f['finding'] or 'detected'}" for f in top)
+            if top
+            else "No pain-point signals detected on the available evidence."
+        )
+        coverage_note = (
+            f"\nHeld in Review: the score clears the Qualified bar but only {available_count} signals had data "
+            f"(at least {self.min_signals_for_qualified} needed to auto-qualify)."
+            if held_for_review
+            else ""
         )
         explanation = (
             f"Overall Score: {overall_score}/100 ({score_band.value.upper()}). "
             f"Evaluated on {available_ratio} available signals "
             f"(Website: {website_subscore if website_subscore is not None else 'N/A'}, "
-            f"Marketing: {marketing_subscore if marketing_subscore is not None else 'N/A'}).\n"
+            f"Marketing: {marketing_subscore if marketing_subscore is not None else 'N/A'})."
+            f"{coverage_note}\n"
             f"Primary Pain Points / Opportunities:\n{opp_text}"
         )
 

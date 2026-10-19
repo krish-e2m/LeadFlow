@@ -12,7 +12,12 @@ interface SignalBreakdownProps {
 }
 
 export const SignalBreakdown: React.FC<SignalBreakdownProps> = ({ signals, compact = false }) => {
-  const metadata = (signals["_metadata"] ?? {}) as { available_signals_ratio?: string; fired_signals_count?: number };
+  const metadata = (signals["_metadata"] ?? {}) as {
+    available_signals_ratio?: string;
+    fired_signals_count?: number;
+    disabled_signals_count?: number;
+    held_for_review?: boolean;
+  };
   const signalList = Object.entries(signals).filter(([key]) => !key.startsWith("_")) as [string, SignalDetailItem][];
   const websiteSignals = signalList.filter(([, s]) => s && s.category === "website");
   const marketingSignals = signalList.filter(([, s]) => s && s.category === "marketing");
@@ -24,14 +29,15 @@ export const SignalBreakdown: React.FC<SignalBreakdownProps> = ({ signals, compa
       </h3>
       <ul className="divide-y divide-border rounded-card border border-border bg-surface">
         {items.map(([key, item]) => {
+          const disabled = item.status === "disabled" || item.enabled === false || item.weight === 0;
           const unavailable = !item.is_available || item.value === null;
-          const fired = !unavailable && (item.value ?? 0) >= 0.5;
+          const fired = !disabled && !unavailable && (item.value ?? 0) >= 0.5;
           return (
             <li key={key} className="space-y-1.5 px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
-                <span className={cn("truncate text-sm", unavailable ? "text-fg-tertiary" : "text-fg")}>{item.label}</span>
+                <span className={cn("truncate text-sm", unavailable || disabled ? "text-fg-tertiary" : "text-fg")}>{item.label}</span>
                 <StatusBadge tone={fired ? "accent" : "neutral"}>
-                  {unavailable ? "Unavailable" : fired ? "Detected" : "Not detected"}
+                  {disabled ? "Disabled" : unavailable ? "Unavailable" : fired ? "Detected" : "Not detected"}
                 </StatusBadge>
               </div>
 
@@ -70,6 +76,8 @@ export const SignalBreakdown: React.FC<SignalBreakdownProps> = ({ signals, compa
         <p className="text-caption text-fg-secondary">
           <span className="font-medium text-fg">{metadata.available_signals_ratio}</span> signals evaluated,{" "}
           {metadata.fired_signals_count ?? 0} detected. Unavailable signals are skipped, not scored as zero.
+          {(metadata.disabled_signals_count ?? 0) > 0 && ` ${metadata.disabled_signals_count} switched off in the engine.`}
+          {metadata.held_for_review && " Held in Review: too few signals had data to auto-qualify."}
         </p>
       )}
       {renderSection("Website signals", websiteSignals)}
