@@ -786,7 +786,13 @@ async def google_oauth_callback(
     - Establishes HttpOnly session cookies
     - Redirects browser to frontend dashboard
     """
-    frontend_base = settings.BACKEND_CORS_ORIGINS[0] if settings.BACKEND_CORS_ORIGINS else "http://localhost:3000"
+    # BACKEND_CORS_ORIGINS is a list of every allowed origin (order not meaningful, and index [0]
+    # isn't necessarily the live app); GOOGLE_FRONTEND_REDIRECT_URL is the one setting that names
+    # the actual frontend to send the browser back to.
+    parsed_frontend = urllib.parse.urlparse(settings.GOOGLE_FRONTEND_REDIRECT_URL)
+    frontend_base = (
+        f"{parsed_frontend.scheme}://{parsed_frontend.netloc}" if parsed_frontend.netloc else "http://localhost:3000"
+    )
     login_url = f"{frontend_base}/login"
 
     if error:
