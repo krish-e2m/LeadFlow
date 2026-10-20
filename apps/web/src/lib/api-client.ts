@@ -14,7 +14,19 @@ export class ApiError extends Error {
   }
 }
 
+// The API runs on a different domain than this app in production, so document.cookie here can
+// never see the CSRF cookie the API sets (cookie reads are strictly same-origin) -- the API hands
+// the value back in every auth response body instead (see AuthUserResponse.csrf_token), and
+// setCsrfToken stores it here for the session. The document.cookie fallback below still covers
+// local dev, where both run on "localhost" and the cookie is genuinely visible.
+let inMemoryCsrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null): void {
+  inMemoryCsrfToken = token;
+}
+
 function getCsrfToken(): string | null {
+  if (inMemoryCsrfToken) return inMemoryCsrfToken;
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(/(?:^|;\s*)leadflow_csrf_token=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : null;

@@ -52,8 +52,9 @@ def _set_auth_cookies(
     response: Response,
     access_token: str,
     refresh_token: str,
-) -> None:
-    """Sets hardened HttpOnly session cookies and CSRF cookie on response."""
+) -> str:
+    """Sets hardened HttpOnly session cookies and CSRF cookie on response. Returns the CSRF token
+    value so the caller can also hand it to the frontend in the JSON body (see AuthUserResponse)."""
     response.set_cookie(
         key=settings.COOKIE_ACCESS_NAME,
         value=access_token,
@@ -74,7 +75,7 @@ def _set_auth_cookies(
         path="/api/v1/auth",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
-    set_csrf_cookie(response)
+    return set_csrf_cookie(response)
 
 
 def _clear_auth_cookies(response: Response) -> None:
@@ -228,7 +229,7 @@ async def signup(
         family_id=ref_payload["family"],
     )
 
-    _set_auth_cookies(response, access_token, refresh_token)
+    csrf_token = _set_auth_cookies(response, access_token, refresh_token)
 
     return LoginResponse(
         user=AuthUserResponse(
@@ -239,6 +240,7 @@ async def signup(
             org_id=org_id,
             org_name=clean_org_name,
             must_reset_password=False,
+            csrf_token=csrf_token,
         ),
         message="Registration successful! Welcome to LeadFlow.",
     )
@@ -468,7 +470,7 @@ async def login(
         family_id=ref_payload["family"],
     )
 
-    _set_auth_cookies(response, access_token, refresh_token)
+    csrf_token = _set_auth_cookies(response, access_token, refresh_token)
 
     return LoginResponse(
         user=AuthUserResponse(
@@ -479,6 +481,7 @@ async def login(
             org_id=org_id,
             org_name=org_name,
             must_reset_password=must_reset,
+            csrf_token=csrf_token,
         ),
         message="Authentication successful",
     )
@@ -585,7 +588,7 @@ async def refresh_session(
         family_id=family_id,
     )
 
-    _set_auth_cookies(response, new_access, new_refresh)
+    csrf_token = _set_auth_cookies(response, new_access, new_refresh)
 
     return LoginResponse(
         user=AuthUserResponse(
@@ -596,6 +599,7 @@ async def refresh_session(
             org_id=u_org_id,
             org_name=u_org_name,
             must_reset_password=u_must_reset,
+            csrf_token=csrf_token,
         ),
         message="Session refreshed successfully",
     )
@@ -630,17 +634,28 @@ async def logout(
 
 @router.get("/me", response_model=AuthUserResponse)
 async def get_current_user_profile(
+    request: Request,
+    response: Response,
     current_user: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Returns verified user profile and active organization context.
     Super admin can dynamically switch organizations using X-Organization-Id header.
+
+    Also hands back the CSRF token value: the frontend runs on a different domain than this API in
+    production, so its JavaScript can never read the CSRF cookie directly (document.cookie is
+    strictly same-origin) -- this is how it learns the value to echo back as X-CSRF-Token on
+    state-changing requests. Re-issues the cookie if it's missing for any reason (e.g. this is the
+    first request after a Google OAuth redirect landed without one, which shouldn't normally happen
+    but must never leave the frontend permanently unable to make any state-changing request).
     """
     org_name = None
     if current_user.org_id:
         stmt = select(Organization.name).where(Organization.id == current_user.org_id)
         org_name = (await db.execute(stmt)).scalar()
+
+    csrf_token = request.cookies.get(settings.COOKIE_CSRF_NAME) or set_csrf_cookie(response)
 
     return AuthUserResponse(
         id=current_user.id,
@@ -649,6 +664,7 @@ async def get_current_user_profile(
         org_id=current_user.org_id,
         org_name=org_name,
         must_reset_password=current_user.must_reset_password,
+        csrf_token=csrf_token,
     )
 
 
@@ -880,7 +896,7 @@ async def google_token_login(
         family_id=ref_payload["family"],
     )
 
-    _set_auth_cookies(response, access_token, refresh_token)
+    csrf_token = _set_auth_cookies(response, access_token, refresh_token)
 
     return LoginResponse(
         user=AuthUserResponse(
@@ -892,6 +908,7 @@ async def google_token_login(
             org_name=org_name,
             must_reset_password=user.must_reset_password,
             avatar_url=user.avatar_url,
+            csrf_token=csrf_token,
         ),
         message="Authentication successful",
     )

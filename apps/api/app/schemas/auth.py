@@ -59,6 +59,10 @@ class AuthUserResponse(BaseModel):
     org_name: Optional[str] = None
     must_reset_password: bool = False
     avatar_url: Optional[str] = None
+    # The frontend and API are on different domains in production, so JS on the frontend can never
+    # read the CSRF cookie directly (document.cookie is strictly same-origin) -- it must be handed
+    # the token value here and sent back as the X-CSRF-Token header instead.
+    csrf_token: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
